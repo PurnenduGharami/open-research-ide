@@ -1,0 +1,37 @@
+{
+  "fps": 60,
+  "width": 1920,
+  "height": 1080,
+  "durationInFrames": 2160,
+  "scenes": [
+    { "id": "hook", "from": 0, "duration": 270 },
+    { "id": "curiosity", "from": 270, "duration": 300 },
+    { "id": "literature", "from": 570, "duration": 270 },
+    { "id": "graph", "from": 840, "duration": 270 },
+    { "id": "review", "from": 1110, "duration": 270 },
+    { "id": "validate", "from": 1380, "duration": 270 },
+    { "id": "exports", "from": 1650, "duration": 240 },
+    { "id": "finale", "from": 1890, "duration": 270 }
+  ],
+  "typing": {
+    "scene": "curiosity",
+    "startFrame": 60,
+    "framesPerChar": 2.4,
+    "text": "Why do sodium-ion batteries fail below 0°C?"
+  },
+  "cues": [
+    { "scene": "hook", "frame": 234, "type": "transition" },
+    { "scene": "curiosity", "frame": 190, "type": "tap" },
+    { "scene": "literature", "frame": 178, "type": "snap" },
+    { "scene": "graph", "frame": 140, "type": "ping" },
+    { "scene": "graph", "frame": 234, "type": "transition" },
+    { "scene": "review", "frame": 170, "type": "tick" },
+    { "scene": "review", "frame": 180, "type": "tick" },
+    { "scene": "review", "frame": 190, "type": "tick" },
+    { "scene": "review", "frame": 234, "type": "transition" },
+    { "scene": "validate", "frame": 180, "type": "chime" },
+    { "scene": "exports", "frame": 50, "type": "softWhoosh" },
+    { "scene": "exports", "frame": 204, "type": "transition" },
+    { "scene": "finale", "frame": 0, "type": "finaleChord" }
+  ]
+}

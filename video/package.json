@@ -4,11 +4,16 @@
   "private": true,
   "scripts": {
     "studio": "remotion studio src/index.ts",
-    "render": "remotion render src/index.ts OpenResearchIDE out/open-research-ide-launch.mp4 --codec=h264 --crf=23 --pixel-format=yuv420p",
+    "audio": "node scripts/generate-audio.mjs",
+    "render": "npm run audio && remotion render src/index.ts OpenResearchIDE out/open-research-ide-launch.mp4 --codec=h264 --crf=18 --pixel-format=yuv420p",
+    "still": "remotion still src/index.ts OpenResearchIDE",
+    "verify": "node scripts/verify.mjs",
     "typecheck": "tsc --noEmit"
   },
   "dependencies": {
     "@remotion/cli": "4.0.540",
+    "@remotion/google-fonts": "4.0.540",
+    "@remotion/paths": "4.0.540",
     "react": "19.2.0",
     "react-dom": "19.2.0",
     "remotion": "4.0.540"

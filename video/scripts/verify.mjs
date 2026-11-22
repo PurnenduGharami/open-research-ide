@@ -17,7 +17,7 @@ const run = (command, args) => {
   return result.stdout;
 };
 
-const probe = JSON.parse(run(ffprobeInstaller.path, [
+const probeVideo = JSON.parse(run(ffprobeInstaller.path, [
   "-v", "error",
   "-select_streams", "v:0",
   "-show_entries", "stream=codec_name,width,height,r_frame_rate,avg_frame_rate,duration,nb_frames",
@@ -25,23 +25,36 @@ const probe = JSON.parse(run(ffprobeInstaller.path, [
   "-of", "json",
   video,
 ]));
-const stream = probe.streams[0];
-const duration = Number(probe.format.duration);
-const size = Number(probe.format.size);
+
+const probeAudio = JSON.parse(run(ffprobeInstaller.path, [
+  "-v", "error",
+  "-select_streams", "a:0",
+  "-show_entries", "stream=codec_name,sample_rate,channels",
+  "-of", "json",
+  video,
+]));
+
+const stream = probeVideo.streams[0];
+const audioStream = probeAudio.streams?.[0];
+const duration = Number(probeVideo.format.duration);
+const size = Number(probeVideo.format.size);
+
 const checks = {
   codec: stream.codec_name === "h264",
   resolution: stream.width === 1920 && stream.height === 1080,
-  fps: stream.r_frame_rate === "30/1" && stream.avg_frame_rate === "30/1",
-  duration: Math.abs(duration - 32) < 0.1,
-  frames: Number(stream.nb_frames) === 960,
-  sizeUnder30MiB: size < 30 * 1024 * 1024,
+  fps: stream.r_frame_rate === "60/1" && stream.avg_frame_rate === "60/1",
+  duration: Math.abs(duration - 36) < 0.1,
+  frames: Number(stream.nb_frames) === 2160,
+  sizeUnder40MiB: size < 40 * 1024 * 1024,
+  audioAac: Boolean(audioStream && audioStream.codec_name === "aac"),
 };
+
 if (!Object.values(checks).every(Boolean)) {
-  console.error(JSON.stringify({ checks, probe }, null, 2));
+  console.error(JSON.stringify({ checks, probeVideo, probeAudio }, null, 2));
   throw new Error("Video metadata verification failed");
 }
 
-const timestamps = [1.7, 5.5, 9.5, 13.5, 17.5, 22, 26.5, 30.5];
+const timestamps = [3.3, 7.6, 12.6, 17.0, 21.8, 26.4, 29.8, 35.0];
 const framePaths = timestamps.map((time, index) => {
   const path = resolve(frameDir, `${String(index + 1).padStart(2, "0")}-${time.toFixed(1)}s.png`);
   run(ffmpegInstaller.path, ["-y", "-ss", String(time), "-i", video, "-frames:v", "1", "-update", "1", path]);
@@ -61,6 +74,7 @@ const report = {
   status: "PASS",
   file: "out/open-research-ide-launch.mp4",
   codec: stream.codec_name,
+  audioCodec: audioStream.codec_name,
   resolution: `${stream.width}x${stream.height}`,
   fps: stream.r_frame_rate,
   durationSeconds: duration,
@@ -73,4 +87,4 @@ const report = {
 };
 writeFileSync(resolve(root, "out/verification.json"), `${JSON.stringify(report, null, 2)}\n`);
 console.log(JSON.stringify(report, null, 2));
-console.log(`PASS — metadata and ${statSync(video).size < 30 * 1024 * 1024 ? "size" : "size check"} verified; inspect out/contact-sheet.png for visual quality.`);
+console.log(`PASS — metadata and ${statSync(video).size < 40 * 1024 * 1024 ? "size" : "size check"} verified; inspect out/contact-sheet.png for visual quality.`);
