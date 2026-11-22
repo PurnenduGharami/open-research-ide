@@ -1,0 +1,13 @@
+{
+  "id": "research-engine",
+  "name": "Open Research Engine",
+  "description": "Real literature retrieval and the sole canonical writer for Open Research IDE",
+  "categories": ["developer-tools"],
+  "contracts": { "tools": ["research_literature_search", "research_project_read", "research_project_commit"] },
+  "activation": { "onStartup": true },
+  "configSchema": {
+    "type": "object",
+    "additionalProperties": false,
+    "properties": { "projectRoot": { "type": "string", "minLength": 1 } }
+  }
+}

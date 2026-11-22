@@ -1,0 +1,17 @@
+node_modules/
+.next/
+.env
+.env.local
+*.log
+*.tsbuildinfo
+.scratch/
+workspace/research-project.json
+workspace/research-project.json.bak
+workspace/events.jsonl
+workspace/assets/
+workspace/exports/
+workspace/smoke/
+.impeccable/review/
+playwright-report/
+test-results/
+.DS_Store

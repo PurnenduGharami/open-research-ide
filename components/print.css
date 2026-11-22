@@ -1,0 +1,50 @@
+@media print {
+  @page { margin: 14mm; }
+
+  .kfg-shell,
+  .exp-shell {
+    color: #1d1d1f !important;
+    background: #ffffff !important;
+    print-color-adjust: exact;
+    -webkit-print-color-adjust: exact;
+  }
+
+  .kfg-flow,
+  .kfg-canvas-note,
+  .exp-generate,
+  .exp-action-hint,
+  .exp-download-row { display: none !important; }
+
+  .kfg-header,
+  .kfg-index summary,
+  .kfg-index-content,
+  .kfg-shell,
+  .exp-format,
+  .exp-integrity,
+  .exp-history-list li,
+  .exp-history-heading {
+    border-color: #d4d4d0 !important;
+    background: #ffffff !important;
+  }
+
+  .kfg-index:not([open]) > .kfg-index-content { display: block !important; }
+  .kfg-index summary { display: none !important; }
+  .kfg-index-content { padding: 0; }
+  .kfg-node-list { gap: 4px; }
+  .kfg-node-index-button {
+    min-height: 0;
+    padding: 8px 0;
+    border: 0;
+    border-bottom: 1px solid #e4e4e1;
+    background: #ffffff !important;
+    break-inside: avoid;
+  }
+  .kfg-node-index-button > svg { display: none; }
+
+  .exp-formats { grid-template-columns: 1fr; gap: 12px; }
+  .exp-format, .exp-integrity { padding: 12px 0; border: 0; border-bottom: 1px solid #e4e4e1; border-radius: 0; break-inside: avoid; }
+  .exp-history { break-inside: auto; }
+  .exp-history-copy time { white-space: normal; }
+  .exp-history-hash code { overflow-wrap: anywhere; }
+  .exp-error { background: #ffffff !important; }
+}
