@@ -19,7 +19,7 @@
   2. Drag and drop your MP4 (< 10 MB) here.
   3. Replace the preview image line below with the GitHub user-attachments URL.
 -->
-![Open Research IDE — Overview](./docs/launch-video-preview.png)
+![Open Research IDE — Overview](./docs/open-research-ide-launch-web.mp4)
 
 </div>
 
