@@ -5,6 +5,7 @@ node_modules/
 *.log
 *.tsbuildinfo
 .scratch/
+agents/*/memory/
 workspace/research-project.json
 workspace/research-project.json.bak
 workspace/events.jsonl
