@@ -1,6 +1,6 @@
 "use client";
 
-import { useId, useMemo } from "react";
+import { useId, useMemo, useState } from "react";
 import {
   Background,
   BackgroundVariant,
@@ -51,6 +51,8 @@ type GraphNodeData = {
 type GraphNode = Node<GraphNodeData, "research">;
 type GraphEdge = Edge<{ relationship: EdgeType }, "smoothstep">;
 
+const ALL_TYPES: NodeType[] = ["paper", "evidence", "contradiction", "gap", "hypothesis", "review", "experiment", "result", "lab"];
+
 const NODE_ICONS: Record<NodeType, LucideIcon> = {
   paper: BookOpen,
   evidence: Quote,
@@ -64,15 +66,15 @@ const NODE_ICONS: Record<NodeType, LucideIcon> = {
 };
 
 const NODE_COLORS: Record<NodeType, string> = {
-  paper: "#476c87",
-  evidence: "#2f6550",
-  contradiction: "#b34b43",
-  gap: "#9a6a27",
-  hypothesis: "#476c87",
-  experiment: "#2f6550",
-  result: "#2f6550",
-  review: "#636366",
-  lab: "#476c87",
+  paper: "#1e4fc2",
+  evidence: "#1e4fc2",
+  contradiction: "#b91c1c",
+  gap: "#92400e",
+  hypothesis: "#1e4fc2",
+  experiment: "#1e4fc2",
+  result: "#166534",
+  review: "#525760",
+  lab: "#787e88",
 };
 
 const NODE_COLUMNS: Record<NodeType, number> = {
@@ -92,10 +94,9 @@ function compareIds(a: ResearchNode, b: ResearchNode): number {
 }
 
 function nodeDetail(node: ResearchNode): string | undefined {
-  if (node.type === "paper") {
-    return [node.data.year, node.data.venue].filter(Boolean).join(" · ") || undefined;
-  }
+  if (node.type === "paper") return [node.data.year, node.data.venue].filter(Boolean).join(" · ") || undefined;
   if (node.type === "review" && node.data.reviewer) return `${node.data.reviewer} reviewer`;
+  if (node.type === "experiment" && node.data.modality) return `${node.data.modality} · expectations frozen`;
   if (node.type === "experiment" && node.data.expectedOutcomesFrozenAt) return "Expected outcomes frozen";
   if (node.type === "lab" && node.data.price) return node.data.price.kind;
   return undefined;
@@ -125,13 +126,21 @@ function ResearchFlowNode({ data, selected }: NodeProps<GraphNode>) {
 
 const nodeTypes = { research: ResearchFlowNode };
 
-function buildGraph(project: ResearchProject, selectedNodeId?: string): { nodes: GraphNode[]; edges: GraphEdge[] } {
-  // Nodes and relationships are captured from this one canonical revision.
-  const canonicalNodes = project.nodes;
-  const knownIds = new Set(canonicalNodes.map((node) => node.id));
+function buildGraph(
+  project: ResearchProject,
+  selectedNodeId: string | undefined,
+  activeTypes: Set<NodeType>,
+  verifiedOnly: boolean,
+): { nodes: GraphNode[]; edges: GraphEdge[] } {
+  const filteredNodes = project.nodes.filter((node) => {
+    if (!activeTypes.has(node.type)) return false;
+    if (verifiedOnly && node.type === "evidence" && node.data.verified !== true) return false;
+    return true;
+  });
+  const knownIds = new Set(filteredNodes.map((node) => node.id));
   const columns = new Map<number, ResearchNode[]>();
 
-  for (const node of [...canonicalNodes].sort(compareIds)) {
+  for (const node of [...filteredNodes].sort(compareIds)) {
     const column = NODE_COLUMNS[node.type];
     columns.set(column, [...(columns.get(column) ?? []), node]);
   }
@@ -143,7 +152,7 @@ function buildGraph(project: ResearchProject, selectedNodeId?: string): { nodes:
       nodes.push({
         id: node.id,
         type: "research",
-        position: { x: column * 300, y: row * 192 + (maxRows - columnNodes.length) * 96 },
+        position: { x: column * 310, y: row * 188 + (maxRows - columnNodes.length) * 90 },
         data: {
           label: node.title,
           title: node.title,
@@ -163,7 +172,7 @@ function buildGraph(project: ResearchProject, selectedNodeId?: string): { nodes:
   const edges: GraphEdge[] = project.edges
     .filter((edge) => knownIds.has(edge.source) && knownIds.has(edge.target))
     .map((edge) => {
-      const color = edge.type === "contradicts" ? "#b34b43" : edge.type === "supports" ? "#2f6550" : "#858587";
+      const color = edge.type === "contradicts" ? "#b91c1c" : edge.type === "supports" ? "#1e4fc2" : "#787e88";
       const selected = edge.source === selectedNodeId || edge.target === selectedNodeId;
       return {
         id: edge.id,
@@ -176,10 +185,10 @@ function buildGraph(project: ResearchProject, selectedNodeId?: string): { nodes:
         focusable: false,
         className: `kfg-edge kfg-edge--${edge.type}${selected ? " kfg-edge--selected" : ""}`,
         style: { stroke: color, strokeWidth: selected ? 2.25 : 1.5 },
-        labelStyle: { fill: edge.type === "contradicts" ? "#b34b43" : "#636366", fontSize: 10, fontWeight: 600 },
+        labelStyle: { fill: edge.type === "contradicts" ? "#b91c1c" : "#525760", fontSize: 10, fontWeight: 600 },
         labelBgStyle: { fill: "#ffffff", fillOpacity: 0.96 },
         labelBgPadding: [6, 4],
-        labelBgBorderRadius: 5,
+        labelBgBorderRadius: 6,
         markerEnd: { type: MarkerType.ArrowClosed, color, width: 16, height: 16 },
         ariaRole: "group",
         ariaLabel: `${edge.label || edge.type}: ${edge.source} to ${edge.target}`,
@@ -192,10 +201,23 @@ function buildGraph(project: ResearchProject, selectedNodeId?: string): { nodes:
 export function KnowledgeGraph({ project, selectedNodeId, onSelectNode }: KnowledgeGraphProps) {
   const titleId = useId();
   const descriptionId = useId();
+  const [hiddenTypes, setHiddenTypes] = useState<Set<NodeType>>(new Set());
+  const [verifiedOnly, setVerifiedOnly] = useState(false);
+
+  const activeTypes = useMemo(() => new Set(ALL_TYPES.filter((t) => !hiddenTypes.has(t))), [hiddenTypes]);
   const graph = useMemo(
-    () => (project ? buildGraph(project, selectedNodeId) : { nodes: [], edges: [] }),
-    [project, selectedNodeId],
+    () => (project ? buildGraph(project, selectedNodeId, activeTypes, verifiedOnly) : { nodes: [], edges: [] }),
+    [project, selectedNodeId, activeTypes, verifiedOnly],
   );
+
+  const toggleType = (type: NodeType) => {
+    setHiddenTypes((prev) => {
+      const next = new Set(prev);
+      if (next.has(type)) next.delete(type);
+      else next.add(type);
+      return next;
+    });
+  };
 
   const selectFromKeyboard = ({ nodes }: OnSelectionChangeParams<GraphNode, GraphEdge>) => {
     if (nodes.length === 1 && nodes[0].id !== selectedNodeId) onSelectNode(nodes[0].id);
@@ -206,7 +228,7 @@ export function KnowledgeGraph({ project, selectedNodeId, onSelectNode }: Knowle
       <section className="kfg-shell kfg-shell--empty" aria-label="Knowledge graph">
         <Network size={26} strokeWidth={1.5} aria-hidden="true" />
         <h2>No investigation map yet</h2>
-        <p>Start a research curiosity. Typed nodes and semantic relationships will appear only after they are committed to canonical state.</p>
+        <p>Start a research curiosity. Typed nodes and semantic relationships appear as canonical artifacts are committed.</p>
       </section>
     );
   }
@@ -215,33 +237,61 @@ export function KnowledgeGraph({ project, selectedNodeId, onSelectNode }: Knowle
     <section className="kfg-shell" aria-labelledby={titleId} aria-describedby={descriptionId}>
       <header className="kfg-header">
         <div>
-          <h2 id={titleId}>Investigation map</h2>
-          <p id={descriptionId}>Revision {project.revision} · {graph.nodes.length} nodes · {graph.edges.length} semantic relationships</p>
+          <h2 id={titleId}>Knowledge Graph</h2>
+          <p id={descriptionId}>Revision {project.revision} · {graph.nodes.length} visible nodes · {graph.edges.length} semantic relationships</p>
         </div>
         <span className="kfg-revision"><Network size={14} aria-hidden="true" /> Canonical r{project.revision}</span>
       </header>
 
+      <div className="kfg-toolbar" role="toolbar" aria-label="Filter graph nodes">
+        {ALL_TYPES.map((type) => {
+          const count = project.nodes.filter((n) => n.type === type).length;
+          if (!count) return null;
+          const active = activeTypes.has(type);
+          return (
+            <button
+              key={type}
+              type="button"
+              className={`kfg-filter-chip${active ? " kfg-filter-chip--active" : ""}`}
+              onClick={() => toggleType(type)}
+              aria-pressed={active}
+            >
+              {NODE_LABELS[type]} ({count})
+            </button>
+          );
+        })}
+        <button
+          type="button"
+          className={`kfg-filter-chip${verifiedOnly ? " kfg-filter-chip--active" : ""}`}
+          onClick={() => setVerifiedOnly((v) => !v)}
+          aria-pressed={verifiedOnly}
+        >
+          Verified evidence only
+        </button>
+      </div>
+
       {graph.nodes.length === 0 ? (
         <div className="kfg-empty-graph">
           <Network size={26} strokeWidth={1.5} aria-hidden="true" />
-          <h3>No graph nodes in revision {project.revision}</h3>
-          <p>The canonical project is ready, but no typed research nodes have been committed yet.</p>
+          <h3>No matching nodes in revision {project.revision}</h3>
+          <p>Adjust your node filters or run a literature query to populate the graph.</p>
         </div>
       ) : (
         <>
           <div className="kfg-flow">
+            {/* Stable key on projectId only — never remounts or resets zoom/pan on revision updates */}
             <ReactFlow<GraphNode, GraphEdge>
-              key={`${project.projectId}:${project.revision}`}
+              key={project.projectId}
               nodes={graph.nodes}
               edges={graph.edges}
               nodeTypes={nodeTypes}
               onNodeClick={(_event, node) => onSelectNode(node.id)}
               onSelectionChange={selectFromKeyboard}
               fitView
-              fitViewOptions={{ padding: 0.16, maxZoom: 0.9 }}
+              fitViewOptions={{ padding: 0.16, maxZoom: 0.95 }}
               minZoom={0.25}
               maxZoom={1.6}
-              nodesDraggable={false}
+              nodesDraggable
               nodesConnectable={false}
               nodesFocusable
               edgesFocusable={false}
@@ -252,9 +302,9 @@ export function KnowledgeGraph({ project, selectedNodeId, onSelectNode }: Knowle
               selectionOnDrag={false}
               onlyRenderVisibleElements
               role="group"
-              aria-label={`Interactive knowledge graph for revision ${project.revision}. A keyboard-accessible node index follows.`}
+              aria-label={`Interactive knowledge graph for revision ${project.revision}.`}
             >
-              <Background variant={BackgroundVariant.Dots} color="#d4d4d0" gap={24} size={1.25} />
+              <Background variant={BackgroundVariant.Dots} color="#e0e0e0" gap={24} size={1.2} />
               <Controls position="bottom-left" showInteractive={false} />
               <MiniMap<GraphNode>
                 className="kfg-minimap"
@@ -263,19 +313,19 @@ export function KnowledgeGraph({ project, selectedNodeId, onSelectNode }: Knowle
                 zoomable
                 ariaLabel="Knowledge graph minimap"
                 bgColor="#ffffff"
-                maskColor="rgb(245 245 244 / 72%)"
+                maskColor="rgba(245, 245, 247, 0.72)"
                 nodeColor={(node) => NODE_COLORS[node.data.kind]}
-                nodeStrokeColor="#d4d4d0"
+                nodeStrokeColor="#e0e0e0"
                 nodeBorderRadius={8}
               />
-              <Panel position="top-right" className="kfg-canvas-note">Scroll to pan · pinch to zoom</Panel>
+              <Panel position="top-right" className="kfg-canvas-note">Drag nodes · scroll to pan · pinch to zoom</Panel>
             </ReactFlow>
           </div>
 
           <details className="kfg-index">
             <summary><ListTree size={16} aria-hidden="true" /> Keyboard-accessible node index <span>{graph.nodes.length}</span></summary>
             <div className="kfg-index-content">
-              <p>Select any canonical node to open the same item in the research inspector.</p>
+              <p>Select any canonical node to inspect its provenance and edit or verify it in the inspector.</p>
               <ul role="list" className="kfg-node-list">
                 {project.nodes.map((node) => {
                   const Icon = NODE_ICONS[node.type];
@@ -288,7 +338,7 @@ export function KnowledgeGraph({ project, selectedNodeId, onSelectNode }: Knowle
                         onClick={() => onSelectNode(node.id)}
                         aria-current={selected ? "true" : undefined}
                       >
-                        <span className={`kfg-index-icon kfg-index-icon--${node.type}`}><Icon size={16} strokeWidth={1.8} aria-hidden="true" /></span>
+                        <span className="kfg-index-icon"><Icon size={16} strokeWidth={1.8} aria-hidden="true" /></span>
                         <span className="kfg-index-copy">
                           <span className="kfg-index-kind">{NODE_LABELS[node.type]}</span>
                           <strong>{node.title}</strong>

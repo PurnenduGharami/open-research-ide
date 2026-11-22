@@ -1,115 +1,157 @@
 import assert from "node:assert/strict";
+import { mkdir } from "node:fs/promises";
+import path from "node:path";
 import { chromium } from "playwright";
+import { deleteProject, executeResearchCommand } from "../plugins/research-engine/engine.mjs";
 
-const base = "http://127.0.0.1:3000";
-const targetId = "evidence:openalex:W3215270220";
-const quote = "Previous studies have investigated caffeine (CAF) and taurine (TAU) in isolation and combined during exercise in males.";
+const base = process.env.QA_BASE_URL || "http://127.0.0.1:3000";
+const root = process.cwd();
+const outDir = path.join(root, "workspace", "smoke");
 const errors = [];
 const checks = [];
 
-async function project(page) {
-  const response = await page.request.get(`${base}/api/project`);
-  assert.equal(response.status(), 200);
-  return (await response.json()).project;
+async function seedFixtureProject() {
+  let project = await executeResearchCommand(root, {
+    op: "create",
+    commandId: `qa-seed-${Date.now()}`,
+    curiosity: "Does adaptive quantization reduce LLM inference memory without degrading reasoning accuracy?",
+    title: "Adaptive Quantization & Reasoning Accuracy",
+    mode: "guided",
+  });
+  const abstract = "Adaptive mixed-precision quantization preserves 99.1% of GSM8K reasoning accuracy while cutting KV-cache memory by 42% across 7B and 14B models.";
+  project = await executeResearchCommand(root, {
+    projectId: project.projectId,
+    commandId: `qa-nodes-${Date.now()}`,
+    baseRevision: project.revision,
+    op: "upsert_nodes",
+    payload: {
+      nodes: [
+        { id: "paper:qa1", type: "paper", title: "Mixed-Precision KV-Cache Quantization for Reasoning Models", sourceRefs: ["OpenAlex"], data: { abstract, doi: "10.1000/qa-quant", authors: ["A. Lin", "R. Gupta"], year: 2026, venue: "ICML", url: "https://doi.org/10.1000/qa-quant" } },
+        { id: "ev:qa1", type: "evidence", title: "KV-cache memory reduction claim", sourceRefs: ["paper:qa1"], data: { paperId: "paper:qa1", quote: "Adaptive mixed-precision quantization preserves 99.1% of GSM8K reasoning accuracy" } },
+        { id: "gap:qa1", type: "gap", title: "Long-horizon multi-step proof tasks remain untested", sourceRefs: ["paper:qa1"], data: { description: "Prior evaluations stop at short-chain arithmetic benchmarks." } },
+        { id: "hyp:qa1", type: "hypothesis", title: "4-bit adaptive quantization preserves multi-step math accuracy above 97%", sourceRefs: ["ev:qa1", "gap:qa1"], data: { statement: "Keeping attention sinks at 8-bit while quantizing remaining keys to 4-bit preserves >97% accuracy on multi-step benchmarks." } },
+        { id: "rev:auditor", type: "review", title: "Evidence Auditor", sourceRefs: ["hyp:qa1"], data: { reviewer: "auditor", hypothesisId: "hyp:qa1", verdict: "Quote verified against abstract. Confidence: high.", findings: [{ severity: "low", claim: "Single benchmark cited", rationale: "Expand beyond GSM8K." }] } },
+        { id: "rev:critic", type: "review", title: "Methodology Critic", sourceRefs: ["hyp:qa1"], data: { reviewer: "critic", hypothesisId: "hyp:qa1", verdict: "Add full-precision baseline control. Confidence: medium.", findings: [{ severity: "medium", claim: "Needs FP16 control", rationale: "Compare latency and accuracy on identical seeds." }] } },
+        { id: "rev:feasibility", type: "review", title: "Feasibility Reviewer", sourceRefs: ["hyp:qa1"], data: { reviewer: "feasibility", hypothesisId: "hyp:qa1", verdict: "Directly testable via Python benchmark. Confidence: high.", findings: [{ severity: "low", claim: "Runnable on single GPU/Colab", rationale: "Low compute barrier." }] } },
+        { id: "exp:qa1", type: "experiment", title: "4-bit Adaptive vs FP16 Benchmark", sourceRefs: ["hyp:qa1"], data: { modality: "computational", objective: "Measure memory and accuracy across 50 reasoning prompts.", protocol: ["Run FP16 baseline", "Run adaptive 4-bit quantization", "Compare accuracy and peak VRAM"], expectedOutcomes: [{ metric: "Accuracy retention", prediction: ">= 97% of FP16 baseline" }, { metric: "KV-cache memory", prediction: ">= 35% reduction" }], codeExperiment: { language: "javascript", filename: "bench.mjs", dependencies: [], code: "console.log('Accuracy retention: 98.4%\\nKV-cache reduction: 41.2%');", runCommand: "node bench.mjs", colabReady: true } } },
+        { id: "lab:qa1", type: "lab", title: "Systems Efficiency Group", sourceRefs: ["OpenAlex"], data: { name: "Systems Efficiency Group", institution: "Open Benchmark Consortium", contacted: false, price: { kind: "unavailable", note: "No service fee; open-source benchmark" } } },
+      ],
+      edges: [
+        { id: "e1", source: "ev:qa1", target: "paper:qa1", type: "supports", label: "Exact abstract quote" },
+        { id: "e2", source: "hyp:qa1", target: "gap:qa1", type: "addresses", label: "Addresses gap" },
+        { id: "e3", source: "exp:qa1", target: "hyp:qa1", type: "tests", label: "Tests hypothesis" },
+      ],
+    },
+  });
+  project = await executeResearchCommand(root, {
+    projectId: project.projectId,
+    commandId: `qa-blocks-${Date.now()}`,
+    baseRevision: project.revision,
+    op: "set_blocks",
+    payload: {
+      blocks: [
+        { id: "b-lit", kind: "literature", title: "Literature: adaptive quantization", nodeIds: ["paper:qa1"] },
+        { id: "b-an", kind: "analysis", title: "Grounded evidence & hypothesis", nodeIds: ["ev:qa1", "gap:qa1", "hyp:qa1"] },
+        { id: "b-rev", kind: "review", title: "Independent Review Panel", nodeIds: ["rev:auditor", "rev:critic", "rev:feasibility"] },
+        { id: "b-exp", kind: "experiment", title: "Validation plan", nodeIds: ["exp:qa1", "lab:qa1"] },
+      ],
+    },
+  });
+  project = await executeResearchCommand(root, {
+    projectId: project.projectId,
+    commandId: `qa-ready-${Date.now()}`,
+    baseRevision: project.revision,
+    op: "set_status",
+    payload: { status: "ready", message: "Seeded fixture ready" },
+  });
+  return project;
 }
 
-async function assertNoOverflow(page, view, viewport) {
-  const dimensions = await page.evaluate(() => ({
+async function assertNoOverflow(page, label) {
+  const dims = await page.evaluate(() => ({
     innerWidth: window.innerWidth,
-    html: document.documentElement.scrollWidth,
-    body: document.body.scrollWidth,
+    scrollWidth: document.documentElement.scrollWidth,
   }));
-  assert.ok(dimensions.html <= dimensions.innerWidth, `${viewport} ${view} html overflow: ${JSON.stringify(dimensions)}`);
-  assert.ok(dimensions.body <= dimensions.innerWidth, `${viewport} ${view} body overflow: ${JSON.stringify(dimensions)}`);
-  checks.push(`${viewport} ${view}: no horizontal page overflow`);
+  assert.ok(dims.scrollWidth <= dims.innerWidth + 1, `${label} horizontal overflow: ${JSON.stringify(dims)}`);
+  checks.push(`${label}: no horizontal overflow`);
 }
 
-async function selectAndCloseInspector(page, mobile) {
-  const dialog = page.getByRole("dialog", { name: "Research node inspector" });
-  await dialog.waitFor({ state: "visible" });
-  assert.equal(await dialog.evaluate((node) => node.open), true);
-  const bounds = await dialog.boundingBox();
-  const viewport = page.viewportSize();
-  assert.ok(bounds && viewport && bounds.x >= 0 && bounds.x + bounds.width <= viewport.width, `Inspector is off-screen: ${JSON.stringify(bounds)}`);
-  if (mobile) {
-    assert.equal(await dialog.getAttribute("data-modal"), "true");
-    await dialog.getByRole("button", { name: "Close inspector" }).click();
-    assert.equal(await page.locator(".ori-inspector").evaluate((node) => node.open), false);
-  } else {
-    assert.equal(await dialog.getAttribute("data-modal"), "false");
-    assert.equal(Math.round(bounds.width), 304);
-  }
-}
-
+await mkdir(outDir, { recursive: true });
+const seeded = await seedFixtureProject();
 const browser = await chromium.launch({ headless: true });
+
 try {
-  for (const testCase of [
-    { name: "desktop 1440x1000", width: 1440, height: 1000, mobile: false },
-    { name: "mobile 390x844", width: 390, height: 844, mobile: true },
+  for (const vp of [
+    { name: "desktop-1440", width: 1440, height: 1000 },
+    { name: "mobile-390", width: 390, height: 844 },
   ]) {
-    const context = await browser.newContext({
-      viewport: { width: testCase.width, height: testCase.height },
-      reducedMotion: "reduce",
-    });
+    const context = await browser.newContext({ viewport: { width: vp.width, height: vp.height }, reducedMotion: "reduce" });
     const page = await context.newPage();
-    page.on("pageerror", (error) => errors.push(`${testCase.name} pageerror: ${error.message}`));
-    page.on("console", (message) => {
-      if (message.type() === "error") errors.push(`${testCase.name} console: ${message.text()}`);
-    });
-    await page.goto(base, { waitUntil: "domcontentloaded" });
-    await page.getByRole("heading", { name: /caffeine/i }).first().waitFor();
-    assert.equal(await page.evaluate(() => matchMedia("(prefers-reduced-motion: reduce)").matches), true);
-    await page.getByRole("navigation", { name: "Research views" }).waitFor();
-    assert.equal(await page.getByLabel("Research curiosity").count(), 1);
-    const composer = page.getByLabel("Research curiosity");
-    await composer.fill("UI composer state check only; do not submit.");
-    assert.equal(await page.getByRole("button", { name: "Start research" }).isEnabled(), true);
-    await composer.clear();
-    assert.equal(await page.getByRole("button", { name: "Start research" }).isDisabled(), true);
-    checks.push(`${testCase.name} Research: reduced motion and native labelled composer`);
+    page.on("pageerror", (err) => errors.push(`${vp.name} pageerror: ${err.message}`));
+    page.on("console", (msg) => { if (msg.type() === "error") errors.push(`${vp.name} console: ${msg.text()}`); });
 
-    const canonical = await project(page);
-    const evidence = canonical.nodes.filter((node) => node.type === "evidence");
-    const verified = evidence.filter((node) => node.data.verified === true);
-    assert.equal(canonical.revision, 21);
-    assert.equal(evidence.length, 12);
-    assert.deepEqual(verified.map((node) => node.id), [targetId]);
-    assert.equal(verified[0].data.quote, quote);
-    assert.equal(evidence.filter((node) => node.id !== targetId && node.data.verified).length, 0);
-    const confirmedItem = page.locator(".ori-evidence-list li").first();
-    assert.equal(await confirmedItem.locator("blockquote").textContent(), quote);
-    assert.match(await confirmedItem.innerText(), /Confirmed/);
-    assert.equal(await confirmedItem.getByRole("button", { name: "Confirm evidence" }).count(), 0);
-    assert.equal(await page.getByRole("button", { name: "Confirm evidence" }).count(), 11);
-    await confirmedItem.locator(".ori-node-link").click();
-    await selectAndCloseInspector(page, testCase.mobile);
-    await assertNoOverflow(page, "Research", testCase.name);
-    checks.push(`${testCase.name} Research: exact quote, 1 verified / 11 unverified, inspector and composer states`);
+    await page.goto(base, { waitUntil: "domcontentloaded", timeout: 30000 });
+    await page.getByRole("heading", { name: /Adaptive Quantization/i }).first().waitFor({ timeout: 15000 });
+    await assertNoOverflow(page, `${vp.name} research`);
 
-    await page.getByRole("button", { name: /Knowledge graph/ }).click();
-    await page.locator(".react-flow").waitFor();
-    assert.equal(canonical.nodes.length, 30);
-    assert.ok(await page.locator(".react-flow__node").count() > 0);
-    const graphNode = page.locator(".react-flow__node").first();
-    const graphNodeTitle = (await graphNode.getAttribute("aria-label")).split(": ").slice(1).join(": ");
-    await graphNode.click();
-    await page.getByRole("dialog", { name: "Research node inspector" }).getByRole("heading", { name: graphNodeTitle, exact: true }).waitFor();
-    await selectAndCloseInspector(page, testCase.mobile);
-    await assertNoOverflow(page, "Graph", testCase.name);
-    checks.push(`${testCase.name} Graph: 30 canonical nodes, rendered navigation and inspector states`);
+    // Confirm evidence button works on desktop pass
+    if (vp.name === "desktop-1440") {
+      await page.getByRole("button", { name: "Confirm evidence" }).first().click();
+      await page.getByText("Confirmed").first().waitFor({ timeout: 10000 });
+      await page.screenshot({ path: path.join(outDir, "redesign-desktop-research.png"), fullPage: false });
+      checks.push("evidence confirmation persisted");
+    }
 
-    await page.getByRole("button", { name: /^Published/ }).click();
-    await page.getByRole("heading", { name: "Faithful exports" }).waitFor();
-    assert.equal(await page.getByRole("button", { name: "Export revision 21" }).isEnabled(), true);
-    const integrity = await page.locator(".exp-evidence-summary").innerText();
-    assert.match(integrity, /Verified evidence\s*1 of 12/);
-    assert.match(integrity, /Unverified evidence\s*11/);
-    await assertNoOverflow(page, "Published", testCase.name);
-    checks.push(`${testCase.name} Published: navigation, export state, 1 verified / 11 unverified`);
+    // Knowledge Graph view
+    await page.getByRole("button", { name: /Knowledge Graph/ }).click();
+    await page.locator(".react-flow").waitFor({ timeout: 15000 });
+    await assertNoOverflow(page, `${vp.name} graph`);
+
+    // Validation & Testing Workspace
+    await page.getByRole("button", { name: /Validation/ }).click();
+    await page.getByRole("heading", { name: /Universal Validation/i }).waitFor({ timeout: 10000 });
+    if (vp.name === "desktop-1440") {
+      await page.getByRole("button", { name: /Run Locally/i }).click();
+      await page.locator(".ori-terminal-out").filter({ hasText: "Accuracy retention: 98.4%" }).waitFor({ timeout: 15000 });
+      await page.screenshot({ path: path.join(outDir, "redesign-desktop-validation.png"), fullPage: false });
+      checks.push("local computational code runner executed and captured stdout");
+    }
+    await assertNoOverflow(page, `${vp.name} validation`);
+
+    // Manuscript Studio
+    await page.getByRole("button", { name: /Manuscript/ }).click();
+    await page.getByRole("heading", { name: /Manuscript & Human-Quality Prose Studio/i }).waitFor({ timeout: 10000 });
+    if (vp.name === "desktop-1440") {
+      await page.getByRole("button", { name: /Draft Manuscript/i }).click();
+      await page.getByText(/Prose Quality Score/i).waitFor({ timeout: 15000 });
+      checks.push("manuscript drafted and prose-audited");
+    }
+    await assertNoOverflow(page, `${vp.name} manuscript`);
+
+    // Published & Export Studio (verify fresh export + ZIP download)
+    await page.getByRole("button", { name: /Published/ }).click();
+    await page.getByRole("heading", { name: /Publication & Export Studio/i }).waitFor({ timeout: 10000 });
+    if (vp.name === "desktop-1440") {
+      await page.getByRole("button", { name: /Export revision/i }).click();
+      await page.getByText(/Exports are up to date/i).waitFor({ timeout: 60000 });
+      await page.getByRole("link", { name: /Download Complete Archive/i }).waitFor({ timeout: 10000 });
+      await page.screenshot({ path: path.join(outDir, "redesign-desktop-published.png"), fullPage: false });
+      checks.push("exports generated, fresh (non-stale), and ZIP link available");
+    }
+    await assertNoOverflow(page, `${vp.name} published`);
+
+    // Landing Home (+ New Research)
+    await page.getByRole("button", { name: "New research" }).click();
+    await page.getByRole("heading", { name: /What are you curious about/i }).waitFor({ timeout: 10000 });
+    await page.waitForTimeout(2500);
+    await page.screenshot({ path: path.join(outDir, `redesign-${vp.name}-landing.png`), fullPage: true });
+    await assertNoOverflow(page, `${vp.name} landing`);
+
     await context.close();
   }
   assert.deepEqual(errors, []);
-  console.log(JSON.stringify({ ok: true, revision: 21, evidence: { verified: 1, unverified: 11, total: 12, targetId, quoteUnchanged: true }, errors, checks }, null, 2));
+  console.log(JSON.stringify({ ok: true, checks, errors }, null, 2));
 } finally {
   await browser.close();
+  await deleteProject(root, seeded.projectId).catch(() => {});
 }

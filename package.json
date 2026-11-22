@@ -1,19 +1,22 @@
 {
   "name": "open-research-ide",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "private": true,
-  "description": "A local-first scientific research IDE powered by OpenClaw and Cerebras.",
+  "description": "A local-first, harness-agnostic Scientific Research IDE with grounded literature, independent review panels, multi-modal validation, and reproducible exports.",
+  "license": "MIT",
   "type": "module",
   "engines": {
     "node": ">=22.19.0"
   },
   "scripts": {
+    "setup": "node scripts/setup.mjs",
     "dev": "next dev --hostname 127.0.0.1 --port 3000",
     "build": "next build",
     "start": "next start --hostname 127.0.0.1 --port 3000",
     "typecheck": "tsc --noEmit",
     "test": "node --test tests/*.test.mjs",
     "test:ui": "node scripts/ui-smoke.mjs",
+    "test:fixture-ui": "node tests/wave2-final-qa.mjs",
     "preflight": "node scripts/preflight.mjs"
   },
   "dependencies": {

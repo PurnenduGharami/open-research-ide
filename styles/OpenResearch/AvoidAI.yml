@@ -1,0 +1,16 @@
+extends: existence
+message: "Avoid AI-style filler phrase '%s'; state the empirical claim directly."
+ignorecase: true
+level: warning
+tokens:
+  - delve
+  - tapestry
+  - groundbreaking
+  - game-changing
+  - pivotal
+  - paramount
+  - multifaceted
+  - seamlessly
+  - "it is worth noting"
+  - "in today's rapidly evolving"
+  - "plays a crucial role"

@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { execFile } from "node:child_process";
-import { chmod, mkdtemp, mkdir, readFile, rm, writeFile } from "node:fs/promises";
+import { chmod, mkdtemp, mkdir, readFile, realpath, rm, writeFile } from "node:fs/promises";
 import http from "node:http";
 import { tmpdir } from "node:os";
 import path from "node:path";
@@ -8,7 +8,7 @@ import { fileURLToPath, pathToFileURL } from "node:url";
 import test from "node:test";
 
 const repository = fileURLToPath(new URL("../", import.meta.url));
-const python = process.env.PYTHON || "python3";
+const python = process.env.PYTHON || (process.platform === "win32" ? "python" : "python3");
 const script = (name) => path.isAbsolute(name) ? name : path.join(repository, "scripts", name);
 
 function runPython(name, args, options = {}) {
@@ -47,7 +47,7 @@ test("search_papers uses literature.mjs, preserves DOI/provenance and reports to
   await writeFile(fetchFixture, `
 const allFail = process.env.FIXTURE_ALL_FAIL === "1";
 globalThis.fetch = async (url) => {
-  if (allFail || url.includes("semanticscholar")) {
+  if (allFail || url.includes("semanticscholar") || url.includes("arxiv")) {
     return new Response(JSON.stringify({ error: "fixture unavailable" }), { status: 503 });
   }
   return new Response(JSON.stringify({ results: [{
@@ -72,7 +72,7 @@ globalThis.fetch = async (url) => {
   assert.equal(parsed.papers[0].id, "openalex:W-real-fixture");
   assert.equal(parsed.sources.find((source) => source.id === "openalex").status, "ok");
   assert.match(parsed.sources.find((source) => source.id === "semantic-scholar").error, /503/);
-  assert.ok(parsed.sources.every((source) => source.url.startsWith("https://api.")));
+  assert.ok(parsed.sources.every((source) => source.url.startsWith("https://api.") || source.url.startsWith("https://export.arxiv.org/")));
 
   const failed = await runPython("search_papers.py", ["real fixture"], { env: { ...env, FIXTURE_ALL_FAIL: "1" } });
   assert.equal(failed.code, 2);
@@ -168,9 +168,9 @@ test("export_journey uses argument arrays and parses renderer manifests without 
   const directory = await temporaryDirectory(t, "export-cli-");
   const root = path.join(directory, "project;touch INJECTED");
   await mkdir(root);
-  const fakeNode = path.join(directory, "fake node.py");
+  const fakeNodeScript = path.join(directory, "fake node.py");
   const argumentLog = path.join(directory, "arguments.json");
-  await writeFile(fakeNode, `#!/usr/bin/env python3
+  await writeFile(fakeNodeScript, `#!/usr/bin/env python3
 import json, os, sys
 with open(os.environ["ARGUMENT_LOG"], "w", encoding="utf-8") as stream:
     json.dump(sys.argv[1:], stream)
@@ -183,18 +183,25 @@ print("pdf\\t" + sys.argv[2] + "/workspace/exports/pdf/research-report.pdf\\tsha
 print("latex\\t" + sys.argv[2] + "/workspace/exports/latex/main.tex\\tsha256:" + "c" * 64)
 print("latex\\t" + sys.argv[2] + "/workspace/exports/latex/references.bib\\tsha256:" + "d" * 64)
 `, "utf8");
-  await chmod(fakeNode, 0o755);
+  let fakeNode = fakeNodeScript;
+  if (process.platform === "win32") {
+    fakeNode = path.join(directory, "fake node.cmd");
+    await writeFile(fakeNode, `@echo off\r\n"${python}" "${fakeNodeScript}" %*\r\n`, "utf8");
+  } else {
+    await chmod(fakeNodeScript, 0o755);
+  }
   const env = { ARGUMENT_LOG: argumentLog };
   const result = await runPython("export_journey.py", [root, "--node", fakeNode], { env });
   assert.equal(result.code, 0, result.stderr);
   const manifest = JSON.parse(result.stdout);
   assert.equal(manifest.revision, 9);
-  assert.equal(manifest.projectRoot, root);
+  assert.equal(await realpath(manifest.projectRoot), await realpath(root));
   assert.equal(manifest.files.length, 4);
   assert.deepEqual(manifest.files.map((file) => file.format), ["html", "pdf", "latex", "latex"]);
   assert.equal(manifest.files[0].sha256, "a".repeat(64));
   const invoked = JSON.parse(await readFile(argumentLog, "utf8"));
-  assert.deepEqual(invoked, [script("export-project.mjs"), root]);
+  assert.equal(await realpath(invoked[0]), await realpath(script("export-project.mjs")));
+  assert.equal(await realpath(invoked[1]), await realpath(root));
   assert.equal(await readFile(projectPathForInjection(directory)).catch(() => null), null);
 
   const failed = await runPython("export_journey.py", [root, "--node", fakeNode], { env: { ...env, FAIL_EXPORT: "1" } });
@@ -222,7 +229,9 @@ test("preflight delegates to preflight.mjs, propagates failures, and gives an ac
   await writeFile(preflight, `console.log(JSON.stringify({ cwd: process.cwd(), args: process.argv.slice(2) }));\n`, "utf8");
   const passed = await runPython(copiedPreflight, [directory]);
   assert.equal(passed.code, 0, passed.stderr);
-  assert.deepEqual(JSON.parse(passed.stdout), { cwd: directory, args: [] });
+  const parsedPassed = JSON.parse(passed.stdout);
+  assert.equal(await realpath(parsedPassed.cwd), await realpath(directory));
+  assert.deepEqual(parsedPassed.args, []);
 
   await writeFile(preflight, `console.error("deterministic preflight failure"); process.exitCode = 7;\n`, "utf8");
   const failed = await runPython(copiedPreflight, [directory]);

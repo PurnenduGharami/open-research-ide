@@ -25,7 +25,7 @@ def parse_manifest(output: str) -> dict:
         if not line:
             continue
         revision_match = re.fullmatch(r"revision\t(\d+)", line)
-        file_match = re.fullmatch(r"(html|pdf|latex)\t(.+)\tsha256:([a-f0-9]{64})", line)
+        file_match = re.fullmatch(r"(html|pdf|latex|zip)\t(.+)\tsha256:([a-f0-9]{64})", line)
         if revision_match:
             revision = int(revision_match.group(1))
         elif file_match:

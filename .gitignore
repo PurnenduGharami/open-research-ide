@@ -8,9 +8,12 @@ node_modules/
 agents/*/memory/
 workspace/research-project.json
 workspace/research-project.json.bak
+workspace/projects/
+workspace/runtime-config.json
 workspace/events.jsonl
 workspace/assets/
 workspace/exports/
+workspace/runs/
 workspace/smoke/
 .impeccable/review/
 playwright-report/

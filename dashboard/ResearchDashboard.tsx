@@ -1,58 +1,87 @@
 "use client";
 
-import { useEffect, useId, useRef, useState } from "react";
-import type { FormEvent, ReactNode, RefObject } from "react";
+import { useState } from "react";
+import type { FormEvent, ReactNode } from "react";
 import {
   AlertCircle,
   BookOpen,
+  Check,
   CheckCircle2,
+  ClipboardCheck,
   Clock,
   Download,
+  ExternalLink,
   FileText,
   FlaskConical,
+  Lightbulb,
   LoaderCircle,
   Microscope,
   Network,
   PanelRight,
-  Play,
-  Settings2,
+  Plus,
+  Send,
+  ShieldCheck,
   Square,
-  X,
+  Trash2,
+  XCircle,
 } from "lucide-react";
 import { NODE_LABELS } from "../packages/contracts";
 import type {
+  ExperimentModality,
+  InvestigationMode,
+  ManuscriptDocument,
+  MetricObservation,
   ResearchNode,
   ResearchProject,
+  ResearchProjectSummary,
   RunTelemetry,
   SetupStatus,
   ViewId,
 } from "../packages/contracts";
-import {
-  AnalysisBlock,
-  DashboardEmptyState,
-  ExperimentBlock,
-  LiteratureTable,
-  ResultBlock,
-  ReviewBlock,
-  SourceFailures,
-  StepTracker,
-  TimelineBlock,
-  formatDateTime,
-} from "./blocks";
+import { LandingHome } from "./LandingHome";
+import { ManuscriptStudio } from "./ManuscriptStudio";
+import { SetupModal } from "./SetupModal";
+import { TestingWorkspace } from "./TestingWorkspace";
+import { MonoMeta, SectionHeader, StatusBadge } from "./ui";
 
 export interface DashboardProps {
   project: ResearchProject | null;
+  projects: ResearchProjectSummary[];
+  showHome: boolean;
   telemetry: RunTelemetry;
+  streamingDelta: string;
   activeView: ViewId;
   onViewChange: (view: ViewId) => void;
-  onStart: (curiosity: string) => void;
+  onGoHome: () => void;
+  onSelectProject: (projectId: string) => void;
+  onDeleteProject: (projectId: string) => void;
+  onStart: (curiosity: string, mode: InvestigationMode) => void;
+  onContinue: (message: string) => void;
+  onTriggerReviewPanel: () => void;
+  onSynthesizeExperiment: (modality?: ExperimentModality) => void;
   onStop: () => void;
-  onOpenSetup?: () => void;
   onPreflight: () => Promise<SetupStatus>;
+  onSaveConfig: (payload: Record<string, unknown>) => Promise<SetupStatus>;
   onSelectNode: (id: string) => void;
   selectedNodeId?: string;
-  onConfirmEvidence: (id: string) => void;
-  onImportResult: (experimentId: string, observations: string) => void;
+  onEvidenceAction: (id: string, action: "confirm" | "unconfirm" | "reject") => void;
+  onAddManualEvidence: (paperId: string, quote: string, title?: string) => void;
+  onAddPaperByDoi: (doi: string) => void;
+  onUpdateNode: (nodeId: string, patch: { title?: string; data?: Record<string, unknown> }) => void;
+  onDeleteNode: (nodeId: string) => void;
+  onRunCode: (experimentId: string, code: string) => void;
+  onDownloadValidation: (experimentId: string, action: "colab" | "survey-schema" | "survey-csv") => void;
+  onDiscoverLabs: () => void;
+  onUpdateLab: (nodeId: string, patch: Record<string, unknown>) => void;
+  onImportResult: (payload: {
+    experimentId: string;
+    observations: string;
+    metricResults: MetricObservation[];
+    csvText?: string;
+    datasetName?: string;
+    sourceModality?: ExperimentModality;
+  }) => void;
+  onManuscriptAction: (action: "draft" | "audit" | "humanize" | "save", manuscript?: ManuscriptDocument) => void;
   onExport: () => void;
   busy: boolean;
   error?: string;
@@ -60,568 +89,827 @@ export interface DashboardProps {
   exportPanel?: ReactNode;
 }
 
-const NAV_ITEMS = [
+const NAV_ITEMS: Array<{ id: ViewId; label: string; icon: typeof Microscope }> = [
   { id: "research", label: "Research", icon: Microscope },
   { id: "literature", label: "Literature", icon: BookOpen },
-  { id: "experiments", label: "Experiments", icon: FlaskConical },
-  { id: "graph", label: "Knowledge graph", icon: Network },
-  { id: "published", label: "Published", icon: FileText },
-] as const;
+  { id: "experiments", label: "Validation", icon: FlaskConical },
+  { id: "graph", label: "Knowledge Graph", icon: Network },
+  { id: "manuscript", label: "Manuscript", icon: FileText },
+  { id: "published", label: "Published", icon: Download },
+];
 
-const VIEW_COPY: Record<ViewId, { title: string; description: string }> = {
-  research: { title: "Research canvas", description: "A continuous, inspectable record of the live investigation." },
-  literature: { title: "Literature", description: "Normalized provider records, exact abstract availability, and source issues." },
-  experiments: { title: "Experiments", description: "Frozen predictions, lab options, and separately imported observations." },
-  graph: { title: "Knowledge graph", description: "Semantic nodes and relationships from the same canonical revision." },
-  published: { title: "Published", description: "Export files generated from the live research state." },
-};
-
-function formatElapsed(elapsedMs?: number): string | undefined {
-  if (typeof elapsedMs !== "number" || !Number.isFinite(elapsedMs) || elapsedMs < 0) return undefined;
-  const seconds = Math.floor(elapsedMs / 1000);
-  const hours = Math.floor(seconds / 3600);
-  const minutes = Math.floor((seconds % 3600) / 60);
-  const remainder = seconds % 60;
-  return hours
-    ? `${hours}:${String(minutes).padStart(2, "0")}:${String(remainder).padStart(2, "0")}`
-    : `${minutes}:${String(remainder).padStart(2, "0")}`;
+function formatElapsed(elapsedMs?: number): string {
+  if (typeof elapsedMs !== "number" || !Number.isFinite(elapsedMs) || elapsedMs < 0) return "—";
+  const sec = Math.floor(elapsedMs / 1000);
+  const min = Math.floor(sec / 60);
+  return `${min}:${String(sec % 60).padStart(2, "0")}`;
 }
 
-function Telemetry({ telemetry }: { telemetry: RunTelemetry }) {
-  const elapsed = formatElapsed(telemetry.elapsedMs);
-  const hasRealUsage = typeof telemetry.outputTokens === "number" && Number.isFinite(telemetry.outputTokens) && telemetry.outputTokens > 0;
-  const hasTps = hasRealUsage && typeof telemetry.outputTps === "number" && Number.isFinite(telemetry.outputTps) && telemetry.outputTps >= 0;
+export function ResearchDashboard(props: DashboardProps) {
+  const {
+    project,
+    projects,
+    showHome,
+    telemetry,
+    streamingDelta,
+    activeView,
+    onViewChange,
+    onGoHome,
+    onSelectProject,
+    onDeleteProject,
+    onStart,
+    onContinue,
+    onTriggerReviewPanel,
+    onSynthesizeExperiment,
+    onStop,
+    onPreflight,
+    onSaveConfig,
+    onSelectNode,
+    selectedNodeId,
+    onEvidenceAction,
+    onAddManualEvidence,
+    onAddPaperByDoi,
+    onUpdateNode,
+    onDeleteNode,
+    onRunCode,
+    onDownloadValidation,
+    onDiscoverLabs,
+    onUpdateLab,
+    onImportResult,
+    onManuscriptAction,
+    onExport,
+    busy,
+    error,
+    graph,
+    exportPanel,
+  } = props;
+
+  const [inspectorVisible, setInspectorVisible] = useState(true);
+  const [followUp, setFollowUp] = useState("");
+  const [doiInput, setDoiInput] = useState("");
+
+  const active = telemetry.status === "running" || telemetry.status === "connecting";
+  const selectedNode = project?.nodes.find((n) => n.id === selectedNodeId);
+  const isLanding = showHome || !project;
+
+  const counts: Record<ViewId, number> = {
+    research: project?.uiBlocks.length ?? 0,
+    literature: project?.nodes.filter((n) => n.type === "paper").length ?? 0,
+    experiments: project?.nodes.filter((n) => n.type === "experiment").length ?? 0,
+    graph: project?.nodes.length ?? 0,
+    manuscript: project?.manuscript ? project.manuscript.sections.length : 0,
+    published: project?.exports.length ?? 0,
+  };
+
+  const handleFollowUp = (event: FormEvent) => {
+    event.preventDefault();
+    if (!followUp.trim() || busy || active) return;
+    onContinue(followUp.trim());
+    setFollowUp("");
+  };
+
+  const handleAddDoi = (event: FormEvent) => {
+    event.preventDefault();
+    if (!doiInput.trim() || busy) return;
+    onAddPaperByDoi(doiInput.trim());
+    setDoiInput("");
+  };
+
+  const hasTps = typeof telemetry.outputTokens === "number" && telemetry.outputTokens > 0 && typeof telemetry.outputTps === "number";
 
   return (
-    <div className="ori-telemetry" aria-label="Run telemetry">
-      <span className={`ori-run-status ori-run-status--${telemetry.status}`}>
-        {telemetry.status === "running" || telemetry.status === "connecting" ? <LoaderCircle size={13} aria-hidden="true" /> : <span className="ori-status-dot" aria-hidden="true" />}
-        {telemetry.status}
-      </span>
-      <div className="ori-telemetry-item">
-        <Clock size={14} aria-hidden="true" />
-        <span className="ori-telemetry-label">Elapsed</span>
-        {elapsed ? <span className="ori-telemetry-value">{elapsed}</span> : <><span aria-hidden="true" className="ori-telemetry-value">—</span><span className="ori-visually-hidden">Elapsed time unavailable</span></>}
-      </div>
-      <div className="ori-telemetry-item ori-telemetry-tps">
-        <span className="ori-telemetry-label">{telemetry.outputTpsLabel}</span>
-        {hasTps ? <span className="ori-telemetry-value">{telemetry.outputTps!.toFixed(1)}</span> : <><span aria-hidden="true" className="ori-telemetry-value">—</span><span className="ori-visually-hidden">Run-average output TPS unavailable without provider usage</span></>}
+    <div className="ori-app">
+      <a className="ori-skip-link" href="#ori-main-content">Skip to main content</a>
+
+      {/* Unified Precision Light Header */}
+      <header className="ori-topbar">
+        <div className="ori-topbar-left">
+          <button type="button" className="ori-brand-btn" onClick={onGoHome}>
+            <span className="ori-brand-mark" aria-hidden="true"><Microscope size={14} /></span>
+            <span>Open Research IDE</span>
+          </button>
+          <span className="ori-topbar-divider" aria-hidden="true" />
+          <button type="button" className="ori-btn ori-btn--ghost ori-btn--sm" onClick={onGoHome} aria-label="New research">
+            <Plus size={14} aria-hidden="true" />
+            <span>New</span>
+          </button>
+          {projects.length > 0 ? (
+            <select
+              aria-label="Switch research project"
+              className="ori-project-select"
+              value={!isLanding && project ? project.projectId : ""}
+              onChange={(e) => { if (e.target.value) onSelectProject(e.target.value); }}
+            >
+              <option value="" disabled>Projects ({projects.length})</option>
+              {projects.map((p) => (
+                <option key={p.projectId} value={p.projectId}>{p.title.slice(0, 44)}</option>
+              ))}
+            </select>
+          ) : null}
+        </div>
+
+        {!isLanding && project ? (
+          <nav className="ori-topbar-nav" aria-label="Research views">
+            {NAV_ITEMS.map(({ id, label }) => (
+              <button
+                key={id}
+                type="button"
+                className={`ori-nav-tab${activeView === id ? " ori-nav-tab--active" : ""}`}
+                onClick={() => onViewChange(id)}
+                aria-current={activeView === id ? "page" : undefined}
+              >
+                <span>{label}</span>
+                <span className="ori-nav-count">{counts[id]}</span>
+              </button>
+            ))}
+          </nav>
+        ) : <div />}
+
+        <div className="ori-topbar-right">
+          <SetupModal onPreflight={onPreflight} onSaveConfig={onSaveConfig} />
+          {!isLanding && project ? (
+            <button type="button" className="ori-btn ori-btn--primary ori-btn--sm" onClick={onExport} disabled={busy}>
+              <Download size={14} aria-hidden="true" />
+              <span>Export</span>
+            </button>
+          ) : null}
+        </div>
+      </header>
+
+      {isLanding ? (
+        <LandingHome
+          projects={projects}
+          busy={busy}
+          error={error}
+          onStart={onStart}
+          onSelectProject={onSelectProject}
+          onDeleteProject={onDeleteProject}
+        />
+      ) : (
+        <>
+          {/* Context & Telemetry Strip */}
+          <div className="ori-context-bar">
+            <div className="ori-context-title">
+              <h1>{project.title}</h1>
+              <MonoMeta>r{project.revision}</MonoMeta>
+              <StatusBadge tone="neutral">{project.mode === "autonomous" ? "Autonomous" : "Guided"}</StatusBadge>
+              <StatusBadge tone={project.status === "error" ? "danger" : project.status === "investigating" ? "accent" : "ok"}>
+                {project.status}
+              </StatusBadge>
+            </div>
+            <div className="ori-context-meta">
+              <div className="ori-telemetry" aria-label="Run telemetry">
+                <span><Clock size={12} style={{ verticalAlign: "-2px" }} /> <span className="ori-telemetry-val">{formatElapsed(telemetry.elapsedMs)}</span></span>
+                <span>{telemetry.outputTpsLabel}: <span className="ori-telemetry-val">{hasTps ? telemetry.outputTps!.toFixed(1) : "—"}</span></span>
+              </div>
+              {active ? (
+                <button type="button" className="ori-btn ori-btn--danger ori-btn--sm" onClick={onStop} disabled={busy}>
+                  <Square size={12} /> Stop
+                </button>
+              ) : null}
+              <button
+                type="button"
+                className="ori-btn ori-btn--secondary ori-btn--sm"
+                onClick={() => setInspectorVisible((v) => !v)}
+                aria-expanded={inspectorVisible}
+                aria-label="Toggle inspector"
+              >
+                <PanelRight size={14} /> Inspector
+              </button>
+            </div>
+          </div>
+
+          <div className={`ori-workspace${inspectorVisible ? "" : " ori-workspace--no-inspector"}`}>
+            <main id="ori-main-content" className="ori-canvas" tabIndex={-1}>
+              <div className="ori-canvas-scroll">
+                <div className={`ori-canvas-body${activeView === "graph" ? " ori-canvas-body--wide" : ""}`}>
+                  {error ? (
+                    <div className="ori-banner ori-banner--danger" role="alert">
+                      <AlertCircle size={17} aria-hidden="true" />
+                      <div><strong>Action error:</strong> {error}</div>
+                    </div>
+                  ) : null}
+
+                  {(active || streamingDelta) ? (
+                    <section className="ori-live-stream" aria-live="polite">
+                      <div className="ori-live-stage">
+                        {active ? <LoaderCircle size={15} className="ori-spin" /> : <CheckCircle2 size={15} />}
+                        <span>{telemetry.stage || (active ? "Investigating peer-reviewed literature…" : "Latest stream output")}</span>
+                      </div>
+                      {streamingDelta ? <div className="ori-live-delta">{streamingDelta}</div> : null}
+                    </section>
+                  ) : null}
+
+                  {activeView === "research" ? (
+                    <ResearchCanvasView
+                      project={project}
+                      busy={busy}
+                      onSelectNode={(id) => { onSelectNode(id); setInspectorVisible(true); }}
+                      onEvidenceAction={onEvidenceAction}
+                      onTriggerReviewPanel={onTriggerReviewPanel}
+                      onGoToValidation={() => onViewChange("experiments")}
+                    />
+                  ) : null}
+
+                  {activeView === "literature" ? (
+                    <section className="ori-section-block">
+                      <SectionHeader
+                        eyebrow="Source Registry"
+                        title="Peer-Reviewed Literature"
+                        description="Click any publication to open its immutable abstract in the inspector and anchor verified passages."
+                      />
+                      <form onSubmit={handleAddDoi} style={{ display: "flex", gap: 10, flexWrap: "wrap" }}>
+                        <input
+                          className="ori-input"
+                          style={{ maxWidth: 380 }}
+                          placeholder="Add paper by DOI (e.g., 10.1038/s41586-023-06221-2)"
+                          value={doiInput}
+                          onChange={(e) => setDoiInput(e.target.value)}
+                          disabled={busy}
+                        />
+                        <button type="submit" className="ori-btn ori-btn--secondary" disabled={busy || !doiInput.trim()}>
+                          <Plus size={14} /> Add Paper by DOI
+                        </button>
+                      </form>
+                      <SourceBanner project={project} />
+                      <PaperTable papers={project.nodes.filter((n) => n.type === "paper")} onSelectNode={(id) => { onSelectNode(id); setInspectorVisible(true); }} />
+                    </section>
+                  ) : null}
+
+                  {activeView === "experiments" ? (
+                    <TestingWorkspace
+                      project={project}
+                      busy={busy}
+                      onSelectNode={(id) => { onSelectNode(id); setInspectorVisible(true); }}
+                      onSynthesizeExperiment={(modality) => onSynthesizeExperiment(modality)}
+                      onRunCode={onRunCode}
+                      onDownloadValidation={onDownloadValidation}
+                      onDiscoverLabs={onDiscoverLabs}
+                      onUpdateLab={onUpdateLab}
+                      onImportResult={onImportResult}
+                    />
+                  ) : null}
+
+                  {activeView === "graph" ? graph : null}
+
+                  {activeView === "manuscript" ? (
+                    <ManuscriptStudio project={project} busy={busy} onAction={onManuscriptAction} />
+                  ) : null}
+
+                  {activeView === "published" ? exportPanel : null}
+                </div>
+              </div>
+
+              {/* Non-overlapping Docked Follow-up Bar */}
+              {activeView === "research" ? (
+                <div className="ori-composer-dock">
+                  <form className="ori-composer-dock-inner" onSubmit={handleFollowUp}>
+                    <div className="ori-composer-row">
+                      <label htmlFor="ori-followup-input" className="ori-visually-hidden">Follow-up question or pushback</label>
+                      <input
+                        id="ori-followup-input"
+                        className="ori-input"
+                        placeholder="Ask a follow-up, push back on a paper, or pivot the search..."
+                        value={followUp}
+                        onChange={(e) => setFollowUp(e.target.value)}
+                        disabled={busy || active}
+                      />
+                      <button type="submit" className="ori-btn ori-btn--primary" disabled={busy || active || followUp.trim().length < 3}>
+                        <Send size={14} /> Send
+                      </button>
+                    </div>
+                    <div className="ori-composer-shortcuts">
+                      <button type="button" className="ori-btn ori-btn--secondary ori-btn--sm" disabled={busy || active} onClick={onTriggerReviewPanel}>
+                        <ShieldCheck size={14} /> Run Independent Review Panel
+                      </button>
+                      <button type="button" className="ori-btn ori-btn--secondary ori-btn--sm" disabled={busy || active} onClick={() => onSynthesizeExperiment()}>
+                        <FlaskConical size={14} /> Design Validation Experiment
+                      </button>
+                      <button type="button" className="ori-btn ori-btn--ghost ori-btn--sm" disabled={busy || active} onClick={() => onViewChange("manuscript")}>
+                        <FileText size={14} /> Draft Manuscript
+                      </button>
+                    </div>
+                  </form>
+                </div>
+              ) : null}
+            </main>
+
+            {inspectorVisible ? (
+              <aside className="ori-inspector-rail" aria-label="Research node inspector">
+                <NodeInspectorPanel
+                  project={project}
+                  node={selectedNode}
+                  busy={busy}
+                  onSelectNode={onSelectNode}
+                  onEvidenceAction={onEvidenceAction}
+                  onAddManualEvidence={onAddManualEvidence}
+                  onUpdateNode={onUpdateNode}
+                  onDeleteNode={onDeleteNode}
+                />
+              </aside>
+            ) : null}
+          </div>
+        </>
+      )}
+
+      <footer className="ori-footer">
+        <div className="ori-footer-inner">
+          <span>Open Research IDE · Open-source (MIT), local-first, harness- &amp; model-agnostic scientific workspace.</span>
+          <MonoMeta>Exact abstract SHA-256 anchoring · Zero-memory review panel · Frozen expected outcomes</MonoMeta>
+        </div>
+      </footer>
+    </div>
+  );
+}
+
+function SourceBanner({ project }: { project: ResearchProject }) {
+  const failures = project.sources.filter((s) => s.status !== "ok" || s.error);
+  if (!failures.length) return null;
+  return (
+    <div className="ori-banner ori-banner--warn">
+      <AlertCircle size={16} aria-hidden="true" />
+      <div>
+        <strong>Source transparency:</strong>{" "}
+        {failures.map((s) => `${s.provider} (${s.error || s.status})`).join(" · ")}. No substitute citations were fabricated.
       </div>
     </div>
   );
 }
 
-type SetupState =
-  | { status: "idle" }
-  | { status: "loading" }
-  | { status: "ready"; result: SetupStatus }
-  | { status: "error"; message: string };
+function PaperTable({ papers, onSelectNode }: { papers: ResearchNode[]; onSelectNode: (id: string) => void }) {
+  if (!papers.length) return <p style={{ fontSize: 14, color: "var(--text-muted)" }}>No papers retrieved yet.</p>;
+  return (
+    <div className="ori-table-wrap">
+      <table className="ori-table">
+        <thead>
+          <tr><th>Publication</th><th>Year</th><th>Venue</th><th>DOI</th><th>Snapshot</th></tr>
+        </thead>
+        <tbody>
+          {papers.map((paper) => (
+            <tr key={paper.id}>
+              <td>
+                <button type="button" className="ori-text-link" style={{ fontWeight: 600 }} onClick={() => onSelectNode(paper.id)}>
+                  {paper.title}
+                </button>
+                {Array.isArray(paper.data.authors) && paper.data.authors.length ? (
+                  <div style={{ fontSize: 12, color: "var(--text-muted)", marginTop: 2 }}>{paper.data.authors.slice(0, 3).join(", ")}</div>
+                ) : null}
+              </td>
+              <td><MonoMeta>{paper.data.year ?? "—"}</MonoMeta></td>
+              <td style={{ color: "var(--text-secondary)" }}>{paper.data.venue || "—"}</td>
+              <td>
+                {paper.data.doi ? (
+                  <a href={`https://doi.org/${paper.data.doi}`} target="_blank" rel="noreferrer" className="ori-text-link" style={{ fontSize: 12, fontFamily: "var(--font-mono)" }}>
+                    {paper.data.doi} <ExternalLink size={11} />
+                  </a>
+                ) : "—"}
+              </td>
+              <td><StatusBadge tone={paper.data.abstract ? "accent" : "neutral"}>{paper.data.abstract ? "Immutable" : "Unavailable"}</StatusBadge></td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
+    </div>
+  );
+}
 
-function SetupDialog({
-  onOpenSetup,
-  onPreflight,
+function formatUtcTime(value: string): string {
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return value;
+  return `${new Intl.DateTimeFormat("en-US", { hour: "2-digit", minute: "2-digit", timeZone: "UTC" }).format(date)} UTC`;
+}
+
+function ResearchCanvasView({
+  project,
+  busy,
+  onSelectNode,
+  onEvidenceAction,
+  onTriggerReviewPanel,
+  onGoToValidation,
 }: {
-  onOpenSetup?: () => void;
-  onPreflight: () => Promise<SetupStatus>;
+  project: ResearchProject;
+  busy: boolean;
+  onSelectNode: (id: string) => void;
+  onEvidenceAction: (id: string, action: "confirm" | "unconfirm" | "reject") => void;
+  onTriggerReviewPanel: () => void;
+  onGoToValidation: () => void;
 }) {
-  const titleId = useId();
-  const descriptionId = useId();
-  const dialogRef = useRef<HTMLDialogElement>(null);
-  const requestRef = useRef(0);
-  const [state, setState] = useState<SetupState>({ status: "idle" });
+  const papers = project.nodes.filter((n) => n.type === "paper");
+  const evidence = project.nodes.filter((n) => n.type === "evidence");
+  const hypotheses = project.nodes.filter((n) => n.type === "hypothesis");
+  const reviews = project.nodes.filter((n) => n.type === "review");
+  const experiments = project.nodes.filter((n) => n.type === "experiment");
+  const results = project.nodes.filter((n) => n.type === "result");
+  const paperMap = new Map(papers.map((p) => [p.id, p]));
+  const nodeMap = new Map(project.nodes.map((n) => [n.id, n]));
 
-  const checkStatus = async () => {
-    const requestId = ++requestRef.current;
-    setState({ status: "loading" });
-    try {
-      const result = await onPreflight();
-      if (requestId === requestRef.current) setState({ status: "ready", result });
-    } catch (cause) {
-      if (requestId === requestRef.current) {
-        setState({ status: "error", message: cause instanceof Error ? cause.message : String(cause) });
-      }
-    }
-  };
-
-  const open = () => {
-    onOpenSetup?.();
-    const dialog = dialogRef.current;
-    if (dialog && !dialog.open) dialog.showModal();
-    void checkStatus();
-  };
+  const steps = [
+    { label: "Literature", complete: papers.length > 0, detail: `${papers.length} papers` },
+    { label: "Hypotheses", complete: hypotheses.length > 0, detail: `${hypotheses.length} committed` },
+    { label: "Review Panel", complete: reviews.length >= 3, detail: `${reviews.length} reviews` },
+    { label: "Validation", complete: experiments.length > 0, detail: results.length ? `${results.length} results` : `${experiments.length} plans` },
+    { label: "Manuscript", complete: Boolean(project.manuscript), detail: project.exports.length ? "Exported" : "Draft ready" },
+  ];
 
   return (
     <>
-      <button type="button" className="ori-button ori-button--secondary ori-topbar-action" onClick={open} aria-label="Check setup">
-        <Settings2 size={16} aria-hidden="true" /><span className="ori-action-label">Setup</span>
-      </button>
-      <dialog
-        ref={dialogRef}
-        className="ori-setup-dialog"
-        aria-labelledby={titleId}
-        aria-describedby={descriptionId}
-      >
-        <div className="ori-dialog-header">
-          <div>
-            <h2 id={titleId}>Server setup</h2>
-            <p id={descriptionId}>Validate Cerebras and Gateway configuration without creating a research session.</p>
+      <section className="ori-stage-rail" aria-label="Investigation stages">
+        {steps.map((step, i) => (
+          <div key={step.label} className={`ori-stage-item${step.complete ? " ori-stage-item--complete" : ""}`}>
+            <span className="ori-stage-num">{step.complete ? <Check size={12} /> : i + 1}</span>
+            <span>
+              <span className="ori-stage-label">{step.label}</span>
+              <span className="ori-stage-detail">{step.detail}</span>
+            </span>
           </div>
-          <form method="dialog">
-            <button type="submit" className="ori-icon-button" aria-label="Close setup" autoFocus><X size={19} aria-hidden="true" /></button>
-          </form>
-        </div>
-        <div className="ori-setup-body" aria-busy={state.status === "loading"}>
-          {state.status === "loading" ? (
-            <div className="ori-setup-loading"><LoaderCircle size={20} aria-hidden="true" /><p>Checking server configuration. This does not start research.</p></div>
-          ) : null}
-          {state.status === "error" ? (
-            <div className="ori-setup-error" role="alert"><AlertCircle size={18} aria-hidden="true" /><div><strong>Setup check failed</strong><p>{state.message}</p></div></div>
-          ) : null}
-          {state.status === "ready" ? (
-            <div className="ori-setup-result">
-              <div className={`ori-setup-summary ${state.result.ok ? "ori-setup-summary--ok" : "ori-setup-summary--error"}`}>
-                {state.result.ok ? <CheckCircle2 size={19} aria-hidden="true" /> : <AlertCircle size={19} aria-hidden="true" />}
-                <strong>{state.result.ok ? "Configuration checks passed" : "Configuration needs attention"}</strong>
+        ))}
+      </section>
+
+      <SourceBanner project={project} />
+
+      {project.messages?.length ? (
+        <section className="ori-conversation" aria-label="Research dialogue">
+          {project.messages.map((msg) => (
+            <article key={msg.id} className={`ori-msg${msg.role === "user" ? " ori-msg--user" : ""}`}>
+              <div className="ori-msg-meta">
+                <span>{msg.role === "user" ? "Researcher" : "Research Orchestrator"}</span>
+                <MonoMeta>{msg.stage || msg.role} · {formatUtcTime(msg.createdAt)}</MonoMeta>
               </div>
-              <ul className="ori-setup-checks">
-                {state.result.checks.map((check) => (
-                  <li key={check.id}>
-                    <span className={check.ok ? "ori-check-icon ori-check-icon--ok" : "ori-check-icon ori-check-icon--error"} aria-hidden="true">{check.ok ? <CheckCircle2 size={17} /> : <AlertCircle size={17} />}</span>
-                    <div><strong>{check.label}</strong><p>{check.detail}</p></div>
-                    <span className="ori-pill">{check.ok ? "Passed" : "Failed"}</span>
-                  </li>
-                ))}
-              </ul>
-              <p className="ori-setup-note">{state.result.note}</p>
+              <div className="ori-msg-body">{msg.content}</div>
+            </article>
+          ))}
+        </section>
+      ) : null}
+
+      {project.uiBlocks.map((block) => {
+        const nodes = block.nodeIds.map((id) => nodeMap.get(id)).filter((n): n is ResearchNode => Boolean(n));
+        if (!nodes.length) return null;
+        return (
+          <section key={block.id} className="ori-section-block">
+            <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 12, flexWrap: "wrap" }}>
+              <h2>{block.title}</h2>
+              <StatusBadge tone="neutral">{block.kind}</StatusBadge>
             </div>
-          ) : null}
-        </div>
-        <div className="ori-dialog-footer">
-          <p>No credentials are displayed. No research run is started.</p>
-          <button type="button" className="ori-button ori-button--secondary" onClick={() => void checkStatus()} disabled={state.status === "loading"}>
-            <Settings2 size={15} aria-hidden="true" />Refresh status
-          </button>
-        </div>
-      </dialog>
+
+            {block.kind === "literature" ? (
+              <PaperTable papers={nodes.filter((n) => n.type === "paper")} onSelectNode={onSelectNode} />
+            ) : null}
+
+            {block.kind === "analysis" ? (
+              <div style={{ display: "flex", flexDirection: "column", gap: 14 }}>
+                {nodes.filter((n) => n.type === "evidence" || n.type === "contradiction").length > 0 ? (
+                  <div className="ori-evidence-list">
+                    {nodes.filter((n) => n.type === "evidence" || n.type === "contradiction").map((node) => {
+                      const sourcePaper = node.data.paperId ? paperMap.get(node.data.paperId) : undefined;
+                      const rejected = node.data.verificationStatus === "rejected";
+                      const entryCls = node.type === "contradiction"
+                        ? "ori-evidence-entry ori-evidence-entry--contradiction"
+                        : node.data.verified
+                          ? "ori-evidence-entry ori-evidence-entry--verified"
+                          : "ori-evidence-entry";
+                      return (
+                        <div key={node.id} className={entryCls}>
+                          <div style={{ display: "flex", justifyContent: "space-between", gap: 8, flexWrap: "wrap" }}>
+                            <button type="button" className="ori-text-link" style={{ fontWeight: 600 }} onClick={() => onSelectNode(node.id)}>
+                              {node.title}
+                            </button>
+                            <StatusBadge tone={node.type === "contradiction" || rejected ? "danger" : node.data.verified ? "ok" : "warn"}>
+                              {node.type === "contradiction" ? "Contradiction" : rejected ? "Rejected" : node.data.verified ? "Confirmed" : "Unverified"}
+                            </StatusBadge>
+                          </div>
+                          {node.data.quote ? <blockquote>&ldquo;{node.data.quote}&rdquo;</blockquote> : null}
+                          <div className="ori-evidence-actions">
+                            {sourcePaper ? (
+                              <button type="button" className="ori-text-link" style={{ fontSize: 12 }} onClick={() => onSelectNode(sourcePaper.id)}>
+                                Source: {sourcePaper.title}
+                              </button>
+                            ) : null}
+                            {node.type === "evidence" && !node.data.verified ? (
+                              <button type="button" className="ori-btn ori-btn--primary ori-btn--sm" disabled={busy} onClick={() => onEvidenceAction(node.id, "confirm")}>
+                                <ClipboardCheck size={13} /> Confirm evidence
+                              </button>
+                            ) : null}
+                            {node.type === "evidence" && node.data.verified ? (
+                              <button type="button" className="ori-btn ori-btn--secondary ori-btn--sm" disabled={busy} onClick={() => onEvidenceAction(node.id, "unconfirm")}>
+                                Unconfirm
+                              </button>
+                            ) : null}
+                            {node.type === "evidence" && !rejected ? (
+                              <button type="button" className="ori-btn ori-btn--ghost ori-btn--sm" disabled={busy} onClick={() => onEvidenceAction(node.id, "reject")}>
+                                <XCircle size={13} /> Reject
+                              </button>
+                            ) : null}
+                          </div>
+                        </div>
+                      );
+                    })}
+                  </div>
+                ) : null}
+
+                {nodes.filter((n) => n.type === "gap").map((gap) => (
+                  <div key={gap.id} className="ori-evidence-entry ori-evidence-entry--gap">
+                    <div style={{ display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap" }}>
+                      <StatusBadge tone="warn">Research gap</StatusBadge>
+                      <button type="button" className="ori-text-link" style={{ fontWeight: 600 }} onClick={() => onSelectNode(gap.id)}>{gap.title}</button>
+                    </div>
+                    {typeof gap.data.description === "string" ? <p style={{ fontSize: 14, color: "var(--text-secondary)" }}>{gap.data.description}</p> : null}
+                  </div>
+                ))}
+
+                {nodes.filter((n) => n.type === "hypothesis").map((hyp) => (
+                  <div key={hyp.id} className="ori-hypothesis-strip">
+                    <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", flexWrap: "wrap", gap: 8 }}>
+                      <StatusBadge tone="accent"><Lightbulb size={12} /> Hypothesis</StatusBadge>
+                      <button type="button" className="ori-btn ori-btn--secondary ori-btn--sm" disabled={busy} onClick={onTriggerReviewPanel}>
+                        <ShieldCheck size={13} /> Audit with Independent Review Panel
+                      </button>
+                    </div>
+                    <button type="button" className="ori-text-link" style={{ fontWeight: 600, fontSize: 16 }} onClick={() => onSelectNode(hyp.id)}>{hyp.title}</button>
+                    {typeof hyp.data.statement === "string" ? <p style={{ fontSize: 14, color: "var(--text-secondary)" }}>{hyp.data.statement}</p> : null}
+                  </div>
+                ))}
+              </div>
+            ) : null}
+
+            {block.kind === "review" ? (
+              <div className="ori-review-grid">
+                {(["auditor", "critic", "feasibility"] as const).map((role) => {
+                  const review = nodes.find((n) => n.data.reviewer?.toLowerCase() === role);
+                  const roleTitle = role === "auditor" ? "Evidence Auditor" : role === "critic" ? "Methodology Critic" : "Feasibility Reviewer";
+                  return (
+                    <article key={role} className="ori-review-card">
+                      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+                        <strong style={{ fontSize: 14 }}>{roleTitle}</strong>
+                        <StatusBadge tone="neutral">Zero-memory</StatusBadge>
+                      </div>
+                      {review ? (
+                        <>
+                          <button type="button" className="ori-text-link" style={{ fontSize: 12 }} onClick={() => onSelectNode(review.id)}>Inspect provenance</button>
+                          {review.data.verdict ? <p style={{ fontSize: 13, color: "var(--text-secondary)" }}>{review.data.verdict}</p> : null}
+                          {review.data.parseError ? <p style={{ fontSize: 12, color: "var(--status-danger)" }}>{review.data.parseError}</p> : null}
+                          {(review.data.findings || []).map((f, idx) => (
+                            <div key={idx} className="ori-finding-item">
+                              <StatusBadge tone={f.severity === "high" ? "danger" : f.severity === "medium" ? "warn" : "neutral"}>
+                                {f.severity || "medium"}
+                              </StatusBadge>
+                              <strong>{f.claim || f.finding}</strong>
+                              <span style={{ fontSize: 12, color: "var(--text-secondary)" }}>{f.rationale}</span>
+                            </div>
+                          ))}
+                        </>
+                      ) : <p style={{ fontSize: 13, color: "var(--text-muted)" }}>Not run yet.</p>}
+                    </article>
+                  );
+                })}
+              </div>
+            ) : null}
+
+            {block.kind === "experiment" ? (
+              <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
+                {nodes.filter((n) => n.type === "experiment").map((exp) => (
+                  <div key={exp.id} className="ori-panel">
+                    <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", flexWrap: "wrap", gap: 8 }}>
+                      <button type="button" className="ori-text-link" style={{ fontWeight: 600, fontSize: 16 }} onClick={() => onSelectNode(exp.id)}>{exp.title}</button>
+                      <button type="button" className="ori-btn ori-btn--primary ori-btn--sm" onClick={onGoToValidation}>
+                        Open Validation Workspace
+                      </button>
+                    </div>
+                    <p style={{ fontSize: 14, color: "var(--text-secondary)" }}>
+                      Modality: <strong>{exp.data.modality || "general"}</strong> · {(exp.data.protocol || []).length} steps · {(exp.data.expectedOutcomes || []).length} frozen expectations
+                    </p>
+                  </div>
+                ))}
+              </div>
+            ) : null}
+
+            {block.kind === "result" ? (
+              <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
+                {nodes.filter((n) => n.type === "result").map((res) => (
+                  <div key={res.id} className="ori-panel">
+                    <button type="button" className="ori-text-link" style={{ fontWeight: 600 }} onClick={() => onSelectNode(res.id)}>{res.title}</button>
+                    <p style={{ fontSize: 14, color: "var(--text-secondary)" }}>{res.data.observations}</p>
+                  </div>
+                ))}
+              </div>
+            ) : null}
+          </section>
+        );
+      })}
+
+      {evidence.length > 0 && project.uiBlocks.every((b) => b.kind !== "analysis") ? (
+        <section className="ori-section-block">
+          <h2>Anchored Evidence ({evidence.length})</h2>
+          <div className="ori-evidence-list">
+            {evidence.map((ev) => (
+              <div key={ev.id} className="ori-evidence-entry">
+                <button type="button" className="ori-text-link" onClick={() => onSelectNode(ev.id)}>{ev.title}</button>
+                {ev.data.quote ? <blockquote>{ev.data.quote}</blockquote> : null}
+              </div>
+            ))}
+          </div>
+        </section>
+      ) : null}
     </>
   );
 }
 
-function CuriosityComposer({ busy, active, onStart }: { busy: boolean; active: boolean; onStart: (curiosity: string) => void }) {
-  const id = useId();
-  const [curiosity, setCuriosity] = useState("");
-  const disabled = busy || active;
-  const submit = (event: FormEvent<HTMLFormElement>) => {
-    event.preventDefault();
-    const value = curiosity.trim();
-    if (!value || disabled) return;
-    onStart(value);
-    setCuriosity("");
-  };
-
-  return (
-    <form className="ori-curiosity-composer" onSubmit={submit}>
-      <div className="ori-composer-inner">
-        <label htmlFor={`${id}-curiosity`}>Research curiosity</label>
-        <p id={`${id}-hint`}>{active ? "Stop the active run before starting another curiosity." : "Submit a question to start a dedicated research session. Setup checks never start research."}</p>
-        <div className="ori-composer-controls">
-          <textarea
-            id={`${id}-curiosity`}
-            value={curiosity}
-            onChange={(event) => setCuriosity(event.target.value)}
-            aria-describedby={`${id}-hint`}
-            placeholder="What unresolved question do you want to investigate?"
-            rows={2}
-            required
-            disabled={disabled}
-          />
-          <button type="submit" className="ori-button ori-button--primary ori-start-button" disabled={disabled || !curiosity.trim()}>
-            <Play size={16} aria-hidden="true" />Start research
-          </button>
-        </div>
-      </div>
-    </form>
-  );
-}
-
-function relatedLabs(project: ResearchProject, experimentId: string, blockNodeIds?: string[]): ResearchNode[] {
-  const attached = new Set(blockNodeIds ?? []);
-  const connected = new Set<string>();
-  for (const edge of project.edges) {
-    if (edge.type !== "conducted-at") continue;
-    if (edge.source === experimentId) connected.add(edge.target);
-    if (edge.target === experimentId) connected.add(edge.source);
-  }
-  const labs = project.nodes.filter((node) => node.type === "lab");
-  const related = labs.filter((lab) => attached.has(lab.id) || connected.has(lab.id));
-  const experimentCount = project.nodes.filter((node) => node.type === "experiment").length;
-  return related.length || experimentCount !== 1 ? related : labs;
-}
-
-function ResearchBlock({
-  project,
-  blockId,
-  kind,
-  title,
-  nodeIds,
-  busy,
-  onSelectNode,
-  onConfirmEvidence,
-  onImportResult,
-}: {
-  project: ResearchProject;
-  blockId: string;
-  kind: "literature" | "analysis" | "review" | "experiment" | "result";
-  title: string;
-  nodeIds: string[];
-  busy: boolean;
-  onSelectNode: (id: string) => void;
-  onConfirmEvidence: (id: string) => void;
-  onImportResult: (experimentId: string, observations: string) => void;
-}) {
-  const nodeById = new Map(project.nodes.map((node) => [node.id, node]));
-  const nodes = nodeIds.map((id) => nodeById.get(id)).filter((node): node is ResearchNode => Boolean(node));
-  return (
-    <section className={`ori-block ori-block--${kind}`} aria-labelledby={`${blockId}-title`}>
-      <div className="ori-block-header"><h2 id={`${blockId}-title`}>{title}</h2><span className="ori-revision-label">Revision {project.revision}</span></div>
-      {kind === "literature" ? <>
-        <LiteratureTable papers={nodes.filter((node) => node.type === "paper")} onSelectNode={onSelectNode} />
-        {nodes.some((node) => node.type === "evidence" || node.type === "contradiction") ? <AnalysisBlock project={project} nodeIds={nodes.filter((node) => node.type === "evidence" || node.type === "contradiction").map((node) => node.id)} busy={busy} onSelectNode={onSelectNode} onConfirmEvidence={onConfirmEvidence} /> : null}
-      </> : null}
-      {kind === "analysis" ? <AnalysisBlock project={project} nodeIds={nodeIds} busy={busy} onSelectNode={onSelectNode} onConfirmEvidence={onConfirmEvidence} /> : null}
-      {kind === "review" ? <ReviewBlock project={project} nodeIds={nodeIds} onSelectNode={onSelectNode} /> : null}
-      {kind === "experiment" ? nodes.filter((node) => node.type === "experiment").map((experiment) => (
-        <ExperimentBlock key={experiment.id} experiment={experiment} labs={relatedLabs(project, experiment.id, nodeIds)} busy={busy} onSelectNode={onSelectNode} onImportResult={onImportResult} />
-      )) : null}
-      {kind === "result" ? <ResultBlock project={project} nodeIds={nodeIds} onSelectNode={onSelectNode} /> : null}
-    </section>
-  );
-}
-
-function readableKey(key: string): string {
-  return key.replace(/([a-z])([A-Z])/g, "$1 $2").replace(/[_-]/g, " ").replace(/^./, (letter) => letter.toUpperCase());
-}
-
-function InspectorValue({ value }: { value: unknown }) {
-  if (typeof value === "string") return <span>{value}</span>;
-  if (typeof value === "number" || typeof value === "boolean") return <span className="ori-numeric">{String(value)}</span>;
-  return <pre>{JSON.stringify(value, null, 2)}</pre>;
-}
-
-function NodeInspector({
+function NodeInspectorPanel({
   project,
   node,
   busy,
   onSelectNode,
-  onConfirmEvidence,
+  onEvidenceAction,
+  onAddManualEvidence,
+  onUpdateNode,
+  onDeleteNode,
 }: {
-  project: ResearchProject | null;
+  project: ResearchProject;
   node?: ResearchNode;
   busy: boolean;
   onSelectNode: (id: string) => void;
-  onConfirmEvidence: (id: string) => void;
+  onEvidenceAction: (id: string, action: "confirm" | "unconfirm" | "reject") => void;
+  onAddManualEvidence: (paperId: string, quote: string, title?: string) => void;
+  onUpdateNode: (nodeId: string, patch: { title?: string; data?: Record<string, unknown> }) => void;
+  onDeleteNode: (nodeId: string) => void;
 }) {
-  if (!project) {
-    return <DashboardEmptyState title="No research node selected"><p>The inspector will show canonical node details after an investigation begins.</p></DashboardEmptyState>;
-  }
+  const [quoteText, setQuoteText] = useState("");
+  const [quoteTitle, setQuoteTitle] = useState("");
+  const [editingTitle, setEditingTitle] = useState("");
+  const [isEditing, setIsEditing] = useState(false);
+
   if (!node) {
-    return <DashboardEmptyState title="Select a research node"><p>Choose a paper, evidence passage, review, experiment, or other artifact to inspect its exact revision data.</p></DashboardEmptyState>;
-  }
-
-  const dataEntries = Object.entries(node.data).filter(([, value]) => value !== undefined && value !== null && value !== "");
-  const edges = project.edges.filter((edge) => edge.source === node.id || edge.target === node.id);
-  const nodeById = new Map(project.nodes.map((item) => [item.id, item]));
-
-  return (
-    <div className="ori-node-inspector">
-      <div className="ori-inspector-node-heading">
-        <span className="ori-pill">{NODE_LABELS[node.type]}</span>
-        <h2>{node.title}</h2>
-        <p>Updated {formatDateTime(node.updatedAt)} · Revision {project.revision}</p>
-      </div>
-      {node.type === "evidence" ? (
-        <div className="ori-inspector-confirmation">
-          <strong>{node.data.verified ? "Evidence confirmed" : "Evidence unverified"}</strong>
-          <p>{node.data.verified ? node.data.verificationMethod || "A verification method was not recorded." : "Confirm the exact passage with the deterministic check. No model is used."}</p>
-          {!node.data.verified ? <button type="button" className="ori-button ori-button--primary" disabled={busy} onClick={() => onConfirmEvidence(node.id)}><CheckCircle2 size={16} aria-hidden="true" />Confirm evidence</button> : null}
+    const papers = project.nodes.filter((n) => n.type === "paper").length;
+    const evTotal = project.nodes.filter((n) => n.type === "evidence").length;
+    const evConfirmed = project.nodes.filter((n) => n.type === "evidence" && n.data.verified === true).length;
+    const reviews = project.nodes.filter((n) => n.type === "review").length;
+    const experiments = project.nodes.filter((n) => n.type === "experiment").length;
+    return (
+      <div className="ori-inspector-card">
+        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+          <strong style={{ fontSize: 14 }}>Investigation Inspector</strong>
+          <MonoMeta>r{project.revision}</MonoMeta>
         </div>
-      ) : null}
-      <section aria-labelledby="ori-inspector-data">
-        <h3 id="ori-inspector-data">Canonical data</h3>
-        {dataEntries.length ? <dl className="ori-inspector-data-list">{dataEntries.map(([key, value]) => <div key={key}><dt>{readableKey(key)}</dt><dd><InspectorValue value={value} /></dd></div>)}</dl> : <p className="ori-inline-empty">This node has no additional typed data.</p>}
-      </section>
-      <section aria-labelledby="ori-inspector-provenance">
-        <h3 id="ori-inspector-provenance">Provenance</h3>
-        <dl className="ori-inspector-meta-list">
-          <div><dt>Node ID</dt><dd>{node.id}</dd></div>
-          <div><dt>Created</dt><dd>{formatDateTime(node.createdAt)}</dd></div>
+        <p style={{ fontSize: 13, color: "var(--text-secondary)" }}>
+          Click any paper, quote, hypothesis, review, or experiment to inspect its SHA-256 provenance, verify passages, or edit titles.
+        </p>
+        <dl className="ori-dl" style={{ paddingTop: 8, borderTop: "1px solid var(--border-subtle)" }}>
+          <div style={{ display: "flex", justifyContent: "space-between" }}><dt>Literature</dt><dd><MonoMeta>{papers} papers</MonoMeta></dd></div>
+          <div style={{ display: "flex", justifyContent: "space-between" }}><dt>Evidence</dt><dd><MonoMeta>{evConfirmed}/{evTotal} confirmed</MonoMeta></dd></div>
+          <div style={{ display: "flex", justifyContent: "space-between" }}><dt>Reviews</dt><dd><MonoMeta>{reviews} / 3 panel</MonoMeta></dd></div>
+          <div style={{ display: "flex", justifyContent: "space-between" }}><dt>Validation</dt><dd><MonoMeta>{experiments} protocols</MonoMeta></dd></div>
         </dl>
-        {node.sourceRefs.length ? <ul className="ori-source-ref-list">{node.sourceRefs.map((ref) => <li key={ref}>{ref}</li>)}</ul> : <p className="ori-inline-empty">No source references were supplied.</p>}
-      </section>
-      <section aria-labelledby="ori-inspector-edges">
-        <h3 id="ori-inspector-edges">Semantic relationships</h3>
-        {edges.length ? <ul className="ori-edge-list">{edges.map((edge) => {
-          const otherId = edge.source === node.id ? edge.target : edge.source;
-          const other = nodeById.get(otherId);
-          return (
-            <li key={edge.id} className={edge.type === "contradicts" ? "ori-edge--contradiction" : undefined}>
-              <span className="ori-pill">{edge.type}</span>
-              <strong>{edge.label}</strong>
-              {other ? <button type="button" className="ori-text-button" onClick={() => onSelectNode(other.id)}>{other.title}</button> : <span>{otherId}</span>}
-            </li>
-          );
-        })}</ul> : <p className="ori-inline-empty">No semantic edges connect to this node.</p>}
-      </section>
-    </div>
-  );
-}
-
-function ExportFallback({ project, busy, onExport }: { project: ResearchProject | null; busy: boolean; onExport: () => void }) {
-  if (!project) {
-    return <DashboardEmptyState icon={<FileText size={24} />} title="No research to export"><p>Start an investigation before generating publication files.</p></DashboardEmptyState>;
+      </div>
+    );
   }
-  return (
-    <section className="ori-block" aria-labelledby="ori-export-fallback-title">
-      <div className="ori-block-header"><h2 id="ori-export-fallback-title">Revision exports</h2><button type="button" className="ori-button ori-button--primary" disabled={busy} onClick={onExport}><Download size={15} aria-hidden="true" />Export revision {project.revision}</button></div>
-      {project.exports.length ? <ul className="ori-export-list">{project.exports.map((file) => <li key={file.id}><FileText size={18} aria-hidden="true" /><div><strong>{file.format.toUpperCase()}</strong><p>{file.path}</p><span>Revision {file.revision} · {formatDateTime(file.createdAt)} · SHA-256 {file.sha256}</span></div></li>)}</ul> : <p className="ori-inline-empty">No export files have been generated for this project.</p>}
-    </section>
-  );
-}
 
-export function ResearchDashboard({
-  project,
-  telemetry,
-  activeView,
-  onViewChange,
-  onStart,
-  onStop,
-  onOpenSetup,
-  onPreflight,
-  onSelectNode,
-  selectedNodeId,
-  onConfirmEvidence,
-  onImportResult,
-  onExport,
-  busy,
-  error,
-  graph,
-  exportPanel,
-}: DashboardProps) {
-  const [inspectorOpen, setInspectorOpen] = useState(false);
-  const [inspectorModal, setInspectorModal] = useState<boolean | null>(null);
-  const inspectorRef = useRef<HTMLDialogElement>(null);
-  const inspectorToggleRef = useRef<HTMLButtonElement>(null);
-  const selectedNode = project?.nodes.find((node) => node.id === selectedNodeId);
-  const active = telemetry.status === "running" || telemetry.status === "connecting";
-  const counts: Record<ViewId, number> = {
-    research: project?.uiBlocks.length ?? 0,
-    literature: project?.nodes.filter((node) => node.type === "paper").length ?? 0,
-    experiments: project?.nodes.filter((node) => node.type === "experiment").length ?? 0,
-    graph: project?.nodes.length ?? 0,
-    published: project?.exports.length ?? 0,
-  };
+  const edges = project.edges.filter((e) => e.source === node.id || e.target === node.id);
+  const nodeMap = new Map(project.nodes.map((n) => [n.id, n]));
+  const editable = ["hypothesis", "gap", "contradiction"].includes(node.type);
 
-  useEffect(() => {
-    const media = window.matchMedia("(max-width: 1179px)");
-    const update = () => setInspectorModal(media.matches);
-    update();
-    media.addEventListener("change", update);
-    return () => media.removeEventListener("change", update);
-  }, []);
-
-  useEffect(() => {
-    const dialog = inspectorRef.current;
-    if (!dialog || inspectorModal === null) return;
-    const shouldOpen = inspectorModal ? inspectorOpen : true;
-    const wasModal = dialog.dataset.modal === "true";
-    if (dialog.open && (wasModal !== inspectorModal || !shouldOpen)) dialog.close();
-    if (shouldOpen && !dialog.open) {
-      dialog.dataset.modal = String(inspectorModal);
-      if (inspectorModal) dialog.showModal();
-      else dialog.show();
+  const captureAbstractSelection = () => {
+    const selected = window.getSelection()?.toString().trim();
+    if (selected && typeof node.data.abstract === "string" && node.data.abstract.includes(selected)) {
+      setQuoteText(selected);
     }
-  }, [inspectorModal, inspectorOpen]);
-
-  useEffect(() => {
-    if (selectedNodeId) setInspectorOpen(true);
-  }, [selectedNodeId]);
-
-  const selectNode = (id: string) => {
-    onSelectNode(id);
-    setInspectorOpen(true);
   };
-  const closeInspector = () => inspectorRef.current?.close();
-  const changeView = (view: ViewId) => {
-    onViewChange(view);
-    setInspectorOpen(false);
-  };
-  const viewCopy = activeView === "research" && project
-    ? { title: project.title, description: project.curiosity || VIEW_COPY.research.description }
-    : VIEW_COPY[activeView];
 
-  return (
-    <div className={`ori-shell ori-shell--${activeView}`}>
-      <a className="ori-skip-link" href="#ori-main-content">Skip to research canvas</a>
-      <header className="ori-topbar">
-        <div className="ori-brand"><span className="ori-brand-mark" aria-hidden="true"><Microscope size={20} /></span><span>Open Research IDE</span></div>
-        <div className="ori-project-context">
-          {project ? <><strong>{project.title}</strong><span className="ori-pill">Revision {project.revision}</span><span className="ori-local-label">{project.privacy}</span></> : <span>Local-first scientific research</span>}
-        </div>
-        <Telemetry telemetry={telemetry} />
-        <div className="ori-topbar-actions">
-          {active ? <button type="button" className="ori-button ori-button--stop ori-topbar-action" onClick={onStop} disabled={busy} aria-label="Stop research"><Square size={14} aria-hidden="true" /><span className="ori-action-label">Stop</span></button> : null}
-          <SetupDialog onOpenSetup={onOpenSetup} onPreflight={onPreflight} />
-          <button type="button" className="ori-button ori-button--secondary ori-topbar-action" onClick={onExport} disabled={!project || busy} aria-label="Export research"><Download size={16} aria-hidden="true" /><span className="ori-action-label">Export</span></button>
-          <button
-            ref={inspectorToggleRef}
-            type="button"
-            className="ori-icon-button ori-inspector-toggle"
-            onClick={() => setInspectorOpen((open) => !open)}
-            aria-label={inspectorOpen ? "Close inspector" : "Open inspector"}
-            aria-expanded={inspectorOpen}
-          ><PanelRight size={19} aria-hidden="true" /></button>
-        </div>
-      </header>
-
-      <nav className="ori-navigation" aria-label="Research views">
-        <ul>
-          {NAV_ITEMS.map(({ id, label, icon: Icon }) => (
-            <li key={id}>
-              <button type="button" className={`ori-nav-button${activeView === id ? " ori-nav-button--active" : ""}`} onClick={() => changeView(id)} aria-current={activeView === id ? "page" : undefined}>
-                <Icon size={19} aria-hidden="true" /><span>{label}</span><span className="ori-nav-count" aria-label={`${counts[id]} items`}>{counts[id]}</span>
-              </button>
-            </li>
-          ))}
-        </ul>
-      </nav>
-
-      <main id="ori-main-content" className="ori-canvas" tabIndex={-1}>
-        <div className="ori-canvas-scroll">
-          <div className="ori-document">
-            <header className="ori-view-header">
-              <div><h1>{viewCopy.title}</h1><p>{viewCopy.description}</p></div>
-              {project ? <span className={`ori-project-status ori-project-status--${project.status}`}>{project.status}</span> : null}
-            </header>
-            {busy ? <div className="ori-global-status" role="status"><LoaderCircle size={16} aria-hidden="true" />Applying the requested research action…</div> : null}
-            {error ? <div className="ori-global-error" role="alert"><AlertCircle size={18} aria-hidden="true" /><div><strong>Research action failed</strong><p>{error}</p></div></div> : null}
-
-            <div className="ori-revision" key={`${activeView}-${project?.projectId ?? "empty"}-${project?.revision ?? 0}`}>
-              {activeView === "research" ? (
-                <>
-                  <StepTracker project={project} />
-                  {project ? (
-                    <>
-                      <SourceFailures sources={project.sources} />
-                      {project.uiBlocks.length ? project.uiBlocks.map((block) => (
-                        <ResearchBlock
-                          key={block.id}
-                          project={project}
-                          blockId={block.id}
-                          kind={block.kind}
-                          title={block.title}
-                          nodeIds={block.nodeIds}
-                          busy={busy}
-                          onSelectNode={selectNode}
-                          onConfirmEvidence={onConfirmEvidence}
-                          onImportResult={onImportResult}
-                        />
-                      )) : (
-                        <section className="ori-block ori-pending-block" aria-labelledby="ori-pending-title">
-                          <h2 id="ori-pending-title">No committed artifact blocks yet</h2>
-                          <p>{active ? "The run is active. Persistent blocks will appear after canonical mutations are committed." : "This project revision contains no ordered artifact blocks."}</p>
-                        </section>
-                      )}
-                      <TimelineBlock project={project} onSelectNode={selectNode} />
-                    </>
-                  ) : active ? (
-                    <DashboardEmptyState icon={<Microscope size={28} />} title="Connecting the research run">
-                      <p>Waiting for the first canonical project snapshot. No research artifacts are available yet.</p>
-                    </DashboardEmptyState>
-                  ) : (
-                    <DashboardEmptyState icon={<Microscope size={28} />} title="Begin with a real question">
-                      <p>Your curiosity starts the investigation. Literature, critiques, experiments, and exports will be built only from committed research state.</p>
-                    </DashboardEmptyState>
-                  )}
-                </>
-              ) : null}
-
-              {activeView === "literature" ? (
-                project ? <section className="ori-block" aria-labelledby="ori-literature-view-title"><div className="ori-block-header"><h2 id="ori-literature-view-title">Retrieved papers</h2><span className="ori-revision-label">{pluralNodes(project, "paper")}</span></div><LiteratureTable papers={project.nodes.filter((node) => node.type === "paper")} sources={project.sources} onSelectNode={selectNode} /></section> : <NoProject view="literature" />
-              ) : null}
-
-              {activeView === "experiments" ? (
-                project ? <ExperimentsView project={project} busy={busy} onSelectNode={selectNode} onImportResult={onImportResult} /> : <NoProject view="experiments" />
-              ) : null}
-
-              {activeView === "graph" ? (
-                project ? graph ? <div className="ori-graph-slot">{graph}</div> : <DashboardEmptyState icon={<Network size={24} />} title="Knowledge graph unavailable"><p>The graph view has not been provided for this revision.</p></DashboardEmptyState> : <NoProject view="knowledge graph" />
-              ) : null}
-
-              {activeView === "published" ? exportPanel ?? <ExportFallback project={project} busy={busy} onExport={onExport} /> : null}
-            </div>
-          </div>
-        </div>
-        {activeView === "research" ? <CuriosityComposer busy={busy} active={active} onStart={onStart} /> : null}
-      </main>
-
-      <dialog
-        ref={inspectorRef}
-        className="ori-inspector"
-        aria-label="Research node inspector"
-        onClose={() => setInspectorOpen(false)}
-      >
-        <div className="ori-inspector-header">
-          <h2>Inspector</h2>
-          <button type="button" className="ori-icon-button ori-inspector-close" onClick={closeInspector} aria-label="Close inspector" autoFocus><X size={19} aria-hidden="true" /></button>
-        </div>
-        <div className="ori-inspector-scroll">
-          {selectedNodeId && project && !selectedNode ? <div className="ori-global-error"><AlertCircle size={17} aria-hidden="true" /><p>The selected node is not present in revision {project.revision}.</p></div> : null}
-          <NodeInspector project={project} node={selectedNode} busy={busy} onSelectNode={selectNode} onConfirmEvidence={onConfirmEvidence} />
-        </div>
-      </dialog>
-    </div>
-  );
-}
-
-function pluralNodes(project: ResearchProject, type: "paper" | "experiment"): string {
-  const count = project.nodes.filter((node) => node.type === type).length;
-  return `${count} ${count === 1 ? type : `${type}s`}`;
-}
-
-function NoProject({ view }: { view: string }) {
-  return <DashboardEmptyState title={`No ${view} yet`}><p>Start a research curiosity from the Research canvas before opening this view.</p></DashboardEmptyState>;
-}
-
-function ExperimentsView({
-  project,
-  busy,
-  onSelectNode,
-  onImportResult,
-}: {
-  project: ResearchProject;
-  busy: boolean;
-  onSelectNode: (id: string) => void;
-  onImportResult: (experimentId: string, observations: string) => void;
-}) {
-  const experiments = project.nodes.filter((node) => node.type === "experiment");
-  const results = project.nodes.filter((node) => node.type === "result");
-  if (!experiments.length && !results.length) {
-    return <DashboardEmptyState icon={<FlaskConical size={24} />} title="No experiments in this revision"><p>Protocols and frozen expected outcomes appear after Elephant commits an experiment.</p></DashboardEmptyState>;
-  }
   return (
     <>
-      {experiments.map((experiment) => (
-        <section className="ori-block" key={experiment.id} aria-labelledby={`${experiment.id}-view-title`}>
-          <div className="ori-block-header"><h2 id={`${experiment.id}-view-title`}>Experiment plan</h2><span className="ori-revision-label">Revision {project.revision}</span></div>
-          <ExperimentBlock experiment={experiment} labs={relatedLabs(project, experiment.id)} busy={busy} onSelectNode={onSelectNode} onImportResult={onImportResult} />
-        </section>
-      ))}
-      {results.length ? (
-        <section className="ori-block" aria-labelledby="ori-observed-results-title">
-          <div className="ori-block-header"><h2 id="ori-observed-results-title">Observed results</h2><span className="ori-revision-label">Imported separately from predictions</span></div>
-          <ResultBlock project={project} nodeIds={results.map((result) => result.id)} onSelectNode={onSelectNode} />
-        </section>
+      <div className="ori-inspector-card">
+        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: 8 }}>
+          <StatusBadge tone="accent">{NODE_LABELS[node.type]}</StatusBadge>
+          <MonoMeta>r{project.revision}</MonoMeta>
+        </div>
+        {isEditing ? (
+          <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
+            <input className="ori-input" value={editingTitle} onChange={(e) => setEditingTitle(e.target.value)} />
+            <div style={{ display: "flex", gap: 8 }}>
+              <button
+                type="button"
+                className="ori-btn ori-btn--primary ori-btn--sm"
+                disabled={busy || !editingTitle.trim()}
+                onClick={() => { onUpdateNode(node.id, { title: editingTitle.trim() }); setIsEditing(false); }}
+              >
+                Save
+              </button>
+              <button type="button" className="ori-btn ori-btn--secondary ori-btn--sm" onClick={() => setIsEditing(false)}>Cancel</button>
+            </div>
+          </div>
+        ) : (
+          <h2 style={{ fontSize: 16, fontWeight: 600, lineHeight: 1.32 }}>{node.title}</h2>
+        )}
+
+        <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
+          {editable && !isEditing ? (
+            <button type="button" className="ori-btn ori-btn--secondary ori-btn--sm" onClick={() => { setEditingTitle(node.title); setIsEditing(true); }}>
+              Edit title
+            </button>
+          ) : null}
+          {node.type !== "paper" ? (
+            <button type="button" className="ori-btn ori-btn--ghost ori-btn--sm" disabled={busy} onClick={() => onDeleteNode(node.id)}>
+              <Trash2 size={13} /> Delete
+            </button>
+          ) : null}
+        </div>
+      </div>
+
+      {node.type === "evidence" ? (
+        <div className="ori-inspector-card">
+          <strong style={{ fontSize: 13 }}>
+            {node.data.verified ? "Human-confirmed evidence" : node.data.verificationStatus === "rejected" ? "Rejected evidence" : "Unverified evidence"}
+          </strong>
+          <p style={{ fontSize: 12, color: "var(--text-secondary)" }}>
+            SHA-256 verified against the immutable abstract snapshot.
+          </p>
+          <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
+            {!node.data.verified ? (
+              <button type="button" className="ori-btn ori-btn--primary ori-btn--sm" disabled={busy} onClick={() => onEvidenceAction(node.id, "confirm")}>
+                <CheckCircle2 size={13} /> Confirm
+              </button>
+            ) : (
+              <button type="button" className="ori-btn ori-btn--secondary ori-btn--sm" disabled={busy} onClick={() => onEvidenceAction(node.id, "unconfirm")}>
+                Unconfirm
+              </button>
+            )}
+            <button type="button" className="ori-btn ori-btn--ghost ori-btn--sm" disabled={busy} onClick={() => onEvidenceAction(node.id, "reject")}>
+              Reject
+            </button>
+          </div>
+        </div>
       ) : null}
+
+      {node.type === "paper" && typeof node.data.abstract === "string" && node.data.abstract.trim() ? (
+        <div className="ori-inspector-card">
+          <strong style={{ fontSize: 13 }}>Highlight &amp; Anchor Evidence</strong>
+          <p style={{ fontSize: 12, color: "var(--text-secondary)" }}>
+            Select text inside the immutable abstract below to anchor a human-verified passage.
+          </p>
+          <div
+            onMouseUp={captureAbstractSelection}
+            style={{ padding: 12, borderRadius: 10, background: "var(--bg-subtle)", fontSize: 13, lineHeight: 1.5, maxHeight: 200, overflowY: "auto" }}
+          >
+            {node.data.abstract}
+          </div>
+          <input
+            className="ori-input"
+            placeholder="Label (optional)"
+            value={quoteTitle}
+            onChange={(e) => setQuoteTitle(e.target.value)}
+          />
+          <textarea
+            className="ori-textarea"
+            style={{ minHeight: 68 }}
+            placeholder="Exact passage from abstract..."
+            value={quoteText}
+            onChange={(e) => setQuoteText(e.target.value)}
+          />
+          <button
+            type="button"
+            className="ori-btn ori-btn--primary ori-btn--sm"
+            disabled={busy || quoteText.trim().length < 8}
+            onClick={() => {
+              onAddManualEvidence(node.id, quoteText.trim(), quoteTitle.trim() || undefined);
+              setQuoteText("");
+              setQuoteTitle("");
+            }}
+          >
+            <CheckCircle2 size={13} /> Anchor &amp; Confirm Passage
+          </button>
+        </div>
+      ) : null}
+
+      <div className="ori-inspector-card">
+        <strong style={{ fontSize: 13 }}>Canonical Data</strong>
+        <dl className="ori-dl">
+          <div><dt>Node ID</dt><dd><MonoMeta>{node.id}</MonoMeta></dd></div>
+          {Object.entries(node.data).filter(([, v]) => v !== undefined && v !== null && v !== "").map(([k, v]) => (
+            <div key={k}>
+              <dt>{k}</dt>
+              <dd>{typeof v === "object" ? <pre>{JSON.stringify(v, null, 2)}</pre> : String(v)}</dd>
+            </div>
+          ))}
+        </dl>
+      </div>
+
+      <div className="ori-inspector-card">
+        <strong style={{ fontSize: 13 }}>Semantic Links ({edges.length})</strong>
+        {edges.length ? (
+          <ul style={{ display: "flex", flexDirection: "column", gap: 8 }}>
+            {edges.map((edge) => {
+              const otherId = edge.source === node.id ? edge.target : edge.source;
+              const other = nodeMap.get(otherId);
+              return (
+                <li key={edge.id} style={{ fontSize: 13, display: "flex", flexDirection: "column", gap: 3 }}>
+                  <StatusBadge tone={edge.type === "contradicts" ? "danger" : "neutral"}>{edge.type}</StatusBadge>
+                  {other ? (
+                    <button type="button" className="ori-text-link" style={{ fontSize: 13 }} onClick={() => onSelectNode(other.id)}>{other.title}</button>
+                  ) : <MonoMeta>{otherId}</MonoMeta>}
+                </li>
+              );
+            })}
+          </ul>
+        ) : <p style={{ fontSize: 13, color: "var(--text-muted)" }}>No connected edges.</p>}
+      </div>
     </>
   );
 }

@@ -10,6 +10,7 @@ import {
   FileText,
   History,
   LoaderCircle,
+  Package,
   Printer,
   ShieldCheck,
 } from "lucide-react";
@@ -30,32 +31,40 @@ const FORMATS: Array<{
   title: string;
   description: string;
   output: string;
-  href: "/api/exports/html" | "/api/exports/pdf" | "/api/exports/latex";
+  endpoint: string;
   icon: LucideIcon;
 }> = [
   {
     id: "html",
-    title: "Standalone HTML",
-    description: "An interactive, self-contained research journey with its evidence and critique trail intact.",
+    title: "Interactive Research Dossier",
+    description: "Standalone, CSP-safe HTML with embedded SVG knowledge graph, expected-vs-observed tables, manuscript, and timeline.",
     output: "research-report.html",
-    href: "/api/exports/html",
+    endpoint: "/api/exports/html",
     icon: FileCode2,
   },
   {
     id: "pdf",
-    title: "Print-derived PDF",
-    description: "A paginated rendering of the same report, with light print styling and readable source details.",
+    title: "Print-Ready Report",
+    description: "Paginated PDF generated with clean Apple-style print typography and deterministic timestamps.",
     output: "research-report.pdf",
-    href: "/api/exports/pdf",
+    endpoint: "/api/exports/pdf",
     icon: Printer,
   },
   {
     id: "latex",
-    title: "LaTeX sources",
-    description: "Editable main.tex and references.bib sources. The download may be a ZIP archive or main.tex.",
+    title: "Academic Manuscript (LaTeX)",
+    description: "Clean editable main.tex and references.bib using @article / @inproceedings entries without raw internal hashes.",
     output: "main.tex + references.bib",
-    href: "/api/exports/latex",
+    endpoint: "/api/exports/latex",
     icon: FileText,
+  },
+  {
+    id: "zip",
+    title: "Complete Archive (ZIP)",
+    description: "One-click reproducible dossier bundling HTML, PDF, main.tex, references.bib, and canonical research-project.json.",
+    output: "open-research-bundle.zip",
+    endpoint: "/api/exports/zip",
+    icon: Package,
   },
 ];
 
@@ -90,7 +99,7 @@ export function ExportPanel({ project, onExport, busy, error }: ExportPanelProps
       <section className="exp-shell exp-shell--empty" aria-label="Research exports">
         <Archive size={26} strokeWidth={1.5} aria-hidden="true" />
         <h2>No canonical revision to export</h2>
-        <p>Start an investigation first. HTML, PDF, and LaTeX will be generated from committed project state—not from browser-only content.</p>
+        <p>Start an investigation first. HTML, PDF, LaTeX, and ZIP archives are generated strictly from committed project state.</p>
       </section>
     );
   }
@@ -98,14 +107,16 @@ export function ExportPanel({ project, onExport, busy, error }: ExportPanelProps
   const evidence = project.nodes.filter((node) => node.type === "evidence");
   const verified = evidence.filter((node) => node.data.verified === true).length;
   const labs = project.nodes.filter((node) => node.type === "lab" && node.data.price);
-  const currentExported = history.some((item) => item.revision === project.revision);
+  const activeContentRev = project.contentRevision ?? project.revision;
+  const currentExported = history.some((item) => (item.contentRevision ?? item.revision) === activeContentRev);
+  const projectQuery = `?projectId=${encodeURIComponent(project.projectId)}`;
 
   return (
     <section className="exp-shell" aria-labelledby={titleId} aria-busy={busy}>
       <header className="exp-header">
         <div>
-          <h2 id={titleId}>Faithful exports</h2>
-          <p>Generate all three formats together from canonical revision {project.revision}. The server writes the files; this panel never fabricates a download.</p>
+          <h2 id={titleId}>Publication & Export Studio</h2>
+          <p>Generate HTML, PDF, Academic LaTeX/BibTeX, and a complete ZIP dossier from the same canonical revision.</p>
         </div>
         <button type="button" className="exp-generate" onClick={onExport} disabled={busy} aria-describedby={actionHintId}>
           {busy ? <LoaderCircle className="exp-spinner" size={17} aria-hidden="true" /> : <Download size={17} aria-hidden="true" />}
@@ -113,7 +124,7 @@ export function ExportPanel({ project, onExport, busy, error }: ExportPanelProps
         </button>
       </header>
       <p id={actionHintId} className="exp-action-hint">
-        {busy ? "Server generation is in progress. Existing downloads remain unchanged until completion." : "One action generates HTML, PDF, and LaTeX from the same revision."}
+        {busy ? "Server generation is running. Existing downloads stay intact until completion." : "One action builds all four reproducible formats deterministically."}
       </p>
 
       {error ? (
@@ -123,10 +134,15 @@ export function ExportPanel({ project, onExport, busy, error }: ExportPanelProps
         </div>
       ) : null}
 
-      {!currentExported && history.length ? (
+      {currentExported ? (
+        <div className="exp-fresh-note">
+          <CheckCircle2 size={17} aria-hidden="true" />
+          <p>Exports are up to date with the latest research content (content revision {activeContentRev}).</p>
+        </div>
+      ) : history.length ? (
         <div className="exp-stale-note">
           <History size={17} aria-hidden="true" />
-          <p>Revision {project.revision} has not been exported. Downloads below are from their recorded earlier revisions.</p>
+          <p>Research content changed since the last export. Click Export to refresh all four formats.</p>
         </div>
       ) : null}
 
@@ -145,10 +161,12 @@ export function ExportPanel({ project, onExport, busy, error }: ExportPanelProps
               <div className="exp-download-row">
                 {latest ? (
                   <span className="exp-download-links">
-                    <a className="exp-download" href={format.href} download aria-label={`Download ${format.title}, revision ${latest.revision}`}>
+                    <a className="exp-download" href={`${format.endpoint}${projectQuery}`} download aria-label={`Download ${format.title}, revision ${latest.revision}`}>
                       <Download size={15} aria-hidden="true" /> Download r{latest.revision}
                     </a>
-                    {format.id === "latex" ? <a className="exp-download-secondary" href="/api/exports/bib" download>references.bib</a> : null}
+                    {format.id === "latex" ? (
+                      <a className="exp-download-secondary" href={`/api/exports/bib${projectQuery}`} download>references.bib</a>
+                    ) : null}
                   </span>
                 ) : (
                   <span className="exp-download-pending">Generate to enable download</span>
@@ -162,10 +180,10 @@ export function ExportPanel({ project, onExport, busy, error }: ExportPanelProps
       <section className="exp-integrity" aria-labelledby={`${titleId}-integrity`}>
         <div className="exp-integrity-heading">
           <ShieldCheck size={19} strokeWidth={1.7} aria-hidden="true" />
-          <div><h3 id={`${titleId}-integrity`}>Revision integrity</h3><p>Every format preserves evidence verification and lab-price provenance.</p></div>
+          <div><h3 id={`${titleId}-integrity`}>Revision integrity</h3><p>Every export retains evidence confirmation status, frozen predictions, and lab-price provenance.</p></div>
         </div>
         <dl className="exp-evidence-summary">
-          <div><dt>Canonical revision</dt><dd>{project.revision}</dd></div>
+          <div><dt>Canonical revision</dt><dd>r{project.revision}</dd></div>
           <div><dt>Verified evidence</dt><dd>{verified} of {evidence.length}</dd></div>
           <div><dt>Unverified evidence</dt><dd>{evidence.length - verified}</dd></div>
         </dl>
@@ -175,16 +193,16 @@ export function ExportPanel({ project, onExport, busy, error }: ExportPanelProps
             return <span className={`exp-price exp-price--${kind}`} key={kind}>{PRICE_LABELS[kind]} · {count}</span>;
           })}
         </div>
-        <p className="exp-integrity-note"><CheckCircle2 size={14} aria-hidden="true" /> Model estimates remain labelled and are never presented as vendor quotes.</p>
+        <p className="exp-integrity-note"><CheckCircle2 size={14} aria-hidden="true" /> Model estimates remain clearly separated from written facility quotes.</p>
       </section>
 
       <section className="exp-history" aria-labelledby={`${titleId}-history`}>
-        <div className="exp-history-heading"><History size={18} aria-hidden="true" /><h3 id={`${titleId}-history`}>Export history</h3><span>{history.length} files</span></div>
+        <div className="exp-history-heading"><History size={18} aria-hidden="true" /><h3 id={`${titleId}-history`}>Export manifest history</h3><span>{history.length} files</span></div>
         {history.length ? (
           <ol className="exp-history-list">
             {history.map((item) => (
               <li key={item.id}>
-                <span className={`exp-history-format exp-history-format--${item.format}`}>{item.format === "latex" ? "TeX" : item.format.toUpperCase()}</span>
+                <span className="exp-history-format">{item.format === "latex" ? "TeX" : item.format.toUpperCase()}</span>
                 <div className="exp-history-copy">
                   <strong>Revision {item.revision}</strong>
                   <time dateTime={item.createdAt}>{formatDate(item.createdAt)}</time>
@@ -195,7 +213,7 @@ export function ExportPanel({ project, onExport, busy, error }: ExportPanelProps
             ))}
           </ol>
         ) : (
-          <div className="exp-history-empty"><Archive size={18} aria-hidden="true" /><p>No files have been generated yet. Use “Export revision {project.revision}” to create the first manifest entries.</p></div>
+          <div className="exp-history-empty"><Archive size={18} aria-hidden="true" /><p>No export files generated yet. Click Export revision {project.revision} above.</p></div>
         )}
       </section>
     </section>

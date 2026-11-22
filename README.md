@@ -1,106 +1,119 @@
 # Open Research IDE
 
-**Claude Code for academic research — free, local-first, and auditable.**
+**Cursor & Claude Code for scientific research — open-source, local-first, harness-agnostic, and auditable.**
 
-Open Research IDE turns a scientific curiosity into a lived investigation instead of a one-shot generated paper. A dedicated **Elephant** orchestrator uses real OpenAlex and Semantic Scholar records; three fresh, isolated **Goldfish** reviewers audit evidence, challenge reasoning, and assess feasibility. The canonical research state drives the literature view, React Flow knowledge graph, inspector, telemetry, experiment/lab bridge, and exports.
+---
 
-## What it does not do
+## Why Open Research IDE Exists
 
-- It does not invent papers, DOIs, quotations, reviews, laboratory contacts, prices, or experimental results.
-- An evidence passage is not marked verified until a researcher explicitly confirms its exact abstract excerpt.
-- Lab suggestions are uncontacted unless a real contacted status is supplied. Model estimates are never supplier quotes.
-- Imported observations are separate from frozen expected outcomes; a result cannot silently rewrite a prediction.
-- Source outages and rate limits remain visible in the investigation.
+General chat windows like ChatGPT and Claude are great for quick questions—yet serious software engineers still rely on **Cursor**, **Claude Code**, and **CodeRabbit** because real engineering demands persistent workspace state, structured diffs, automated verification, and reproducible builds.
 
-## Requirements
+Scientific inquiry faces the exact same gap. Chat threads lose track of which quote came from which paper, silently invent DOIs or experimental outcomes, conflate predictions with results, and stop at walls of unverified prose.
 
-- Linux/macOS or WSL2
-- Node.js 22.19+ and npm
-- OpenClaw 2026.11.6+ running locally
-- A Cerebras provider configuration in OpenClaw with access to `moonshotai-kimi-k3.1-pro-trial`
-- Python 3.10+ only for the optional data-script CLIs
-- Playwright Chromium for PDF and browser checks (`npx playwright install chromium` if not already installed)
+**Our core belief:** Research should not be gated behind institutional silos. A curious student, independent builder, or outsider who has never stepped inside a chemistry lab or published a paper often asks the exact questions domain veterans take for granted. **Open Research IDE** gives *anyone*—across chemistry, AI/ML, software systems, psychology, materials, or economics—a calm, structured environment to move from raw curiosity to peer-reviewed grounding, independent critique, real-world testing, and a credible research dossier.
 
-## Setup
+---
 
+## Key Capabilities
+
+### 1. Harness- & Model-Agnostic (First-Class OpenClaw Default)
+Never locked into a single model or agent harness:
+- **OpenClaw Gateway (Default Preset):** Works cleanly out of the box with OpenClaw and `cerebras/moonshotai-kimi-k3.1-pro-trial` via one-step setup (`npm run setup` or `./setup.sh`).
+- **Direct Standalone Runtime:** Run the complete IDE with **zero external gateway** using any supported provider directly.
+- **Any LLM Provider (Per Role):** Configure **Research Orchestrator** and **Independent Review Panel** independently across **Cerebras**, **OpenAI / OpenAI-compatible**, **Anthropic Claude**, **Google Gemini**, **OpenRouter**, or **Local Ollama** in `.env` or the isolated Setup Modal.
+- **Zero-Pollution Onboarding:** Credentials and preflight health checks stay strictly inside the isolated Setup Modal and server-side storage (`0600`)—never leaking into the browser or research conversation context.
+
+### 2. Five-Stage Research Workflow (User-Guided + Autonomous Modes)
+Choose **User-Guided Mode (default)** to steer every pivot collaboratively, or **Autonomous Investigation** to execute the full arc end-to-end and pause cleanly when real-world test data is required:
+
+1. **Curiosity & Iterative Literature Dialogue:** Open on a calm search screen with a live-fetched strip of recently published peer-reviewed papers (OpenAlex + arXiv). Query real academic APIs (OpenAlex, Semantic Scholar, arXiv), receive concise grounded explanations with streaming live deltas, and push back across unlimited follow-up turns without overwriting prior proof blocks.
+2. **Hypothesis, Curation & Independent Review Panel:** Form testable hypotheses alongside a stable, filterable **Knowledge Graph** (React Flow). Highlight exact substrings inside immutable paper abstracts to anchor human-verified evidence (`SHA-256`), confirm/unconfirm/reject passages, and run **3 isolated zero-memory reviewers in parallel**:
+   - **Evidence Auditor:** Verifies passage-level citation accuracy and quote integrity.
+   - **Methodology Critic:** Challenges assumptions, confounding variables, and missing controls.
+   - **Feasibility Reviewer:** Evaluates novelty and practical testability.
+3. **Universal Multi-Modal Validation & Testing Workspace:** Adapts to what the science actually requires:
+   - **Computational & Code (Python / JS / C++):** Editable experiment code, opt-in sandboxed local runner with captured stdout/stderr, and one-click **Google Colab (`.ipynb`)** export.
+   - **Human Surveys & Behavioral Studies:** Structured questionnaires, distribution guidance (free academic/community cohorts vs. Prolific/CloudResearch/MTurk cost framing), **Survey JSON**, and **CSV response templates**.
+   - **Physical, Wet-Lab, Hardware & Facilities:** Wired directly to real **OpenAlex authorship/institution/ROR discovery** (`research_find_labs`), never hallucinating labs from memory. Includes outreach email drafts and UI tracking for `contacted` status and verified written `quoted` pricing.
+   - **Structured Expected-vs-Observed Results:** `expectedOutcomes` freeze automatically before data arrives; observations import separately with per-metric verdicts (`supports` / `contradicts` / `inconclusive`) and optional CSV upload.
+4. **Human-Quality Manuscript Studio:** Synthesizes verified literature, reviews, frozen expectations, and observed data into a structured academic manuscript, then audits prose with an integrated **`Vale` + `avoid-ai-writing` + `humanizer`** style pass to eliminate AI clichés, filler transitions, and monotonous cadence.
+5. **Publication & Export Studio:** Deterministically generates four formats from one canonical revision:
+   - **Interactive Research Dossier (`HTML`)** — standalone, strict CSP, embedded SVG Knowledge Graph, expected-vs-observed tables, and timeline.
+   - **Print-Ready Report (`PDF`)** — Apple-style light print typography with deterministic timestamps.
+   - **Academic Manuscript (`main.tex` + `references.bib`)** — clean `@article`/`@inproceedings` entries with zero raw hash dumps.
+   - **Complete Archive (`ZIP`)** — `/api/exports/zip` bundling HTML, PDF, LaTeX, BibTeX, and canonical `research-project.json`.
+
+---
+
+## Epistemic Guardrails (What It Never Does)
+
+- Never invents papers, DOIs, quotes, lab facilities, supplier quotes, or experimental results.
+- Evidence passages must be literal substrings of immutable stored abstracts (`SHA-256` verified) and stay unverified until explicit human confirmation.
+- Frozen `expectedOutcomes` cannot be overwritten when observations arrive (`import_result` creates separate `result` nodes).
+- Literature source outages and rate limits remain visible in the UI and exports.
+- Run telemetry shows measured elapsed time and **run-average output TPS** only when actual provider token usage exists.
+
+---
+
+## Quick Start
+
+### Requirements
+- Node.js **22.19+** and npm
+- **Option A (Default):** OpenClaw running locally + Cerebras provider configured
+- **Option B (Standalone):** Any API key (Cerebras, OpenAI, Anthropic, Gemini, OpenRouter) or local **Ollama** — no external gateway required
+- Optional: Python 3.10+ (local Python experiment runner & optional data CLIs), Playwright Chromium (for PDF export: `npx playwright install chromium`), and [`vale`](https://vale.sh/) CLI (automatically detected for manuscript linting)
+
+### Cross-Platform Setup (macOS, Linux, Windows)
 ```bash
-git clone <your-fork-url> open-research-ide
+git clone https://github.com/PurnenduGharami/open-research-ide.git
 cd open-research-ide
-chmod +x setup.sh
-./setup.sh
+npm run setup
 npm run dev
 ```
 
-Open **http://127.0.0.1:3000**. The Next.js server binds to loopback by default. Do not expose it publicly without adding authentication and transport security.
-
-`setup.sh` installs locked dependencies, preserves existing `.env` credentials, discovers the local Gateway token without printing it, and idempotently configures only the research plugin and these agents:
-
-- `research` — Elephant, with only the three research tools allowed
-- `research-auditor` — evidence auditor, all tools denied
-- `research-critic` — scientific critic, all tools denied
-- `research-feasibility` — feasibility reviewer, all tools denied
-
-Existing unrelated OpenClaw configuration and the existing default agent are preserved. The shared model is `cerebras/moonshotai-kimi-k3.1-pro-trial`; reasoning is off by default.
-
-If Cerebras is not configured, configure that provider in OpenClaw first. The app's setup dialog performs a non-generative preflight; it does not create a research session.
-
-## Daily commands
-
+Or on Linux/macOS/WSL2 with OpenClaw:
 ```bash
-npm run dev          # development server, loopback only
-npm run build        # production build
-npm start            # serve the production build
-npm run typecheck    # strict TypeScript validation
-npm test             # canonical writer, literature, runtime, export, and script tests
-npm run preflight    # non-generative Gateway/model/agent diagnostics
-npm run test:ui      # desktop/mobile browser checks (server must be running)
+chmod +x setup.sh && ./setup.sh
+npm run dev
 ```
 
-### Optional data CLIs
+Open **http://127.0.0.1:3000** (binds to loopback only by default). Click **Setup** in the top bar to switch between **OpenClaw Gateway** and **Direct Standalone Runtime**, pick providers/models per role, or add optional `OPENALEX_MAILTO` / `SEMANTIC_SCHOLAR_API_KEY` credentials.
+
+---
+
+## Daily Commands
 
 ```bash
-python3 scripts/preflight.py
-python3 scripts/search_papers.py --help
-python3 scripts/find_labs.py --help
-python3 scripts/export_journey.py --help
-node scripts/export-project.mjs
+npm run dev             # Development server (127.0.0.1:3000)
+npm run build           # Production build
+npm start               # Serve production build
+npm run typecheck       # Strict TypeScript check
+npm test                # Engine, literature, runtime, platform, export & CLI tests
+npm run preflight       # Non-generative harness/provider diagnostics
+npm run test:fixture-ui # Clean-clone desktop/mobile Playwright QA (server must be running)
 ```
 
-## Research workflow
+---
 
-1. Open **Setup** and run preflight. This checks the local connection, model inventory, and four agents without generating text.
-2. Enter a specific curiosity. This is the only action that creates a research session and canonical project.
-3. Elephant searches concise scientific keywords, records normalized papers and immutable abstract snapshots, and anchors evidence as exact abstract substrings with SHA-256 hashes.
-4. Inspect the graph and right-hand inspector. Click an evidence node, compare its quotation with the source abstract, and explicitly confirm it.
-5. The runtime launches three unique, zero-memory Goldfish sessions in parallel. Each receives only a bounded hypothesis/artifact/raw-abstract packet. Only Elephant/plugin code commits their structured findings.
-6. Elephant synthesizes an experiment protocol, frozen expected outcomes, honest lab options, and an outreach draft. Drafts are not sent automatically.
-7. Import actual observations separately. Predictions remain unchanged.
-8. Export the same canonical revision to interactive standalone HTML, print-derived PDF, and LaTeX (`main.tex` + `references.bib`).
+## Architecture & Trust Boundaries
 
-## Architecture and trust boundaries
+- **Browser (`app/`, `dashboard/`, `components/`):** Same-origin HTTP & SSE only. Strictly follows our Apple Design System ([DESIGN.md](./DESIGN.md)): `#0066cc` Action Blue accent, `#ffffff` / `#f5f5f7` / `#272729` surface alternation, `#000000` global nav, frosted sub-nav, `SF Pro Display` / `SF Pro Text`, zero decorative gradients, zero card shadows.
+- **Next.js Server (`app/api/`, `src/`):** Owns all harness connections (`src/harnesses/harness-adapter.mjs`), LLM provider calls (`src/providers/model-provider.mjs`), server-only secrets (`workspace/runtime-config.json`, `0600`), and same-origin enforcement (`src/server-utils.ts`).
+- **Canonical Engine (`plugins/research-engine/engine.mjs`):** Sole writer for multi-project storage under `workspace/projects/<projectId>/project.json` + `index.json` with per-project write queues, `baseRevision` optimistic locking, idempotent `commandIds`, `.bak` backups, atomic temp-file renames, and startup recovery for interrupted runs.
 
-- **Browser:** same-origin HTTP and SSE only. No Gateway token, Cerebras key, or direct provider connection.
-- **Next.js Node server:** owns the authenticated OpenClaw Gateway WebSocket and all mutations requested by the UI.
-- **`plugins/research-engine`:** sole writer of `workspace/research-project.json`; revision checks, command idempotency, serialized writes, backup, validation, and same-directory atomic rename.
-- **`workspace/research-project.json`:** canonical typed nodes, semantic edges, UI blocks, source failures, runs/usage, timeline, assets, and export manifests.
-- **Goldfish:** fresh agent session per review, no personal/cross-session memory, no tools, bounded evidence packet, no direct canonical writes.
+---
 
-`.env`, live canonical state, backups, generated assets, exports, and test artifacts are gitignored. Keep `CEREBRAS_API_KEY` and Gateway tokens out of `NEXT_PUBLIC_*`, logs, prompts, exports, and commits.
+## Open-Source Inspirations & Credits
 
-## Rate limits and honest telemetry
+Open Research IDE builds on ideas from and explicitly credits these remarkable open-source projects:
 
-Research prompts are bounded. At most three review calls run concurrently, with basic 429 backoff for Cerebras's **100 RPM / 100K TPM** limits. Stopwatch values use measured elapsed time. Output TPS is shown only when actual provider output-token usage and duration exist, and is labelled **run-average output TPS**—not a fabricated live token counter.
+- **[Google `paper-orchestra`](https://github.com/google/paper-orchestra):** Inspired our structured multi-stage manuscript drafting, reflection, and academic LaTeX/BibTeX export pipeline.
+- **[Google `elephant-goldfish-model`](https://github.com/google/elephant-goldfish-model):** Inspired our persistent **Research Orchestrator** paired with zero-memory fresh-context **Independent Review Panel** reviewers to prevent confirmation bias.
+- **`FOREST`:** Inspired strict separation between canonical typed semantic research-graph state and interactive visual layout.
+- **[`Vale`](https://vale.sh/), `avoid-ai-writing`, & `humanizer`:** Inspired our built-in academic prose linter and optional Vale CLI integration to strip AI clichés, filler transitions, and monotonous cadence before publication.
 
-## Project map
+---
 
-- `context/SPEC.md`, `context/DESIGN.md` — locked product and design contracts
-- `packages/contracts` — shared TypeScript canonical types
-- `plugins/research-engine` — real literature retrieval and sole canonical writer
-- `agents` — Elephant and Goldfish operating instructions
-- `src/gateway.mjs`, `src/research-runtime.mjs` — Gateway and investigation/review runtime
-- `app` — Next.js routes, same-origin APIs, and SSE
-- `dashboard`, `components` — Operate UI, graph, inspector slots, and export views
-- `src/export-renderer.mjs` — deterministic standalone HTML/PDF/LaTeX renderer
-- `scripts` — setup, preflight, data, export, and verification CLIs
+## License
 
-See `HANDOFF.md` for the exact verification record and any remaining limitations.
+Released under the [MIT License](./LICENSE).

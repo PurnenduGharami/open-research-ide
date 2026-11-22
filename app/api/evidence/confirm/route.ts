@@ -10,11 +10,19 @@ export async function POST(request: NextRequest) {
     requireSameOrigin(request);
     const body = await request.json();
     if (typeof body.nodeId !== "string" || !body.nodeId) throw new Error("Evidence node ID is required");
-    const current = await readProject(projectRoot);
+    const projectId = typeof body.projectId === "string" ? body.projectId : undefined;
+    const action = body.action === "reject" ? "reject_evidence" : body.action === "unconfirm" ? "unconfirm_evidence" : "confirm_evidence";
+    const current = await readProject(projectRoot, projectId);
     if (!current) throw new Error("No investigation exists");
     const project = await executeResearchCommand(projectRoot, {
-      op: "confirm_evidence", commandId: `ui-confirm-${body.nodeId}-${randomUUID()}`,
-      baseRevision: current.revision, payload: { nodeId: body.nodeId },
+      projectId: current.projectId,
+      op: action,
+      commandId: `ui-${action}-${body.nodeId}-${randomUUID()}`,
+      baseRevision: current.revision,
+      payload: {
+        nodeId: body.nodeId,
+        ...(typeof body.reason === "string" ? { reason: body.reason } : {}),
+      },
     });
     return NextResponse.json({ project }, { headers: noStore });
   } catch (error) {
