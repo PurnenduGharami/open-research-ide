@@ -13,13 +13,10 @@
 
 <br />
 
-<!--
-  To enable GitHub's native inline video player:
-  1. Open README.md in the GitHub web editor.
-  2. Drag and drop your MP4 (< 10 MB) here.
-  3. Replace the preview image line below with the GitHub user-attachments URL.
--->
-![Open Research IDE — Overview](./docs/open-research-ide-launch-web.mp4)
+
+
+https://github.com/user-attachments/assets/40d6cc28-3740-40a0-91f8-fd50fc44c3e9
+
 
 </div>
 
