@@ -25,5 +25,3 @@ jobs:
         run: npm test
       - name: Production build
         run: npm run build
-      - name: Video subproject typecheck
-        run: cd video && npm ci && npm run typecheck

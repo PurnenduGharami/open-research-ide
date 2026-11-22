@@ -16,12 +16,10 @@
 <!--
   To enable GitHub's native inline video player:
   1. Open README.md in the GitHub web editor.
-  2. Drag and drop `video/out/open-research-ide-launch-web.mp4` (< 10 MB) here.
-  3. GitHub will insert a `https://github.com/user-attachments/assets/...` URL that plays natively inline.
+  2. Drag and drop your MP4 (< 10 MB) here.
+  3. Replace the preview image line below with the GitHub user-attachments URL.
 -->
-![Open Research IDE — Launch Film Preview (8 Scenes · 36s · 60fps)](./docs/launch-video-preview.png)
-
-*36-second 1080p60 launch film built with Remotion — see [`video/README.md`](./video/README.md) to preview or re-render locally.*
+![Open Research IDE — Overview](./docs/launch-video-preview.png)
 
 </div>
 
@@ -123,9 +121,6 @@ npm run typecheck       # Strict TypeScript check
 npm test                # Engine, literature, runtime, platform, export & CLI tests
 npm run preflight       # Non-generative harness/provider diagnostics
 npm run test:fixture-ui # Clean-clone desktop/mobile Playwright QA (server must be running)
-
-# Launch video (Remotion, 1080p60)
-cd video && npm install && npm run render && npm run verify
 ```
 
 ---
@@ -135,7 +130,6 @@ cd video && npm install && npm run render && npm run verify
 - **Browser (`app/`, `dashboard/`, `components/`):** Same-origin HTTP & SSE only. Editorial scientific workspace palette (`#fcfcfb` warm paper canvas, `#111315` ink, `#1e4fc2` cobalt accent) with `Instrument Serif`, `Inter`, and `IBM Plex Mono` (`app/globals.css`, `app/layout.tsx`).
 - **Next.js Server (`app/api/`, `src/`):** Owns all harness connections (`src/harnesses/harness-adapter.mjs`), LLM provider calls (`src/providers/model-provider.mjs`), server-only secrets (`workspace/runtime-config.json`, `0600`), and same-origin enforcement (`src/server-utils.ts`).
 - **Canonical Engine (`plugins/research-engine/engine.mjs`):** Sole writer for multi-project storage under `workspace/projects/<projectId>/project.json` + `index.json` with per-project write queues, `baseRevision` optimistic locking, idempotent `commandIds`, `.bak` backups, atomic temp-file renames, and startup recovery for interrupted runs.
-- **Launch Video (`video/`):** Self-contained Remotion project (`src/LaunchVideo.tsx`, `src/scenes/`, `scripts/generate-audio.mjs`, `scripts/verify.mjs`) producing deterministic 1080p60 launch media.
 
 ---
 
