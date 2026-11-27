@@ -5,7 +5,6 @@ import { fileURLToPath } from "node:url";
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const npmCmd = process.platform === "win32" ? "npm.cmd" : "npm";
-const openclawCmd = process.platform === "win32" ? "openclaw.cmd" : "openclaw";
 
 function run(cmd, args, { optional = false } = {}) {
   const result = spawnSync(cmd, args, { cwd: root, stdio: "inherit" });
@@ -16,19 +15,11 @@ function run(cmd, args, { optional = false } = {}) {
   return true;
 }
 
-console.log("Open Research IDE — Cross-Platform Setup");
+console.log("Open Research IDE — Cross-Platform Setup (Google Gemini Standalone Runtime)");
 run(process.execPath, [path.join(root, "scripts", "bootstrap-env.mjs")]);
 run(npmCmd, ["ci"]);
-
-const hasOpenClaw = spawnSync(openclawCmd, ["--version"], { stdio: "ignore" }).status === 0;
-if (hasOpenClaw) {
-  console.log("OpenClaw detected — registering research plugin and agents...");
-  run(process.execPath, [path.join(root, "scripts", "configure-openclaw.mjs")]);
-  run(openclawCmd, ["config", "validate"], { optional: true });
-} else {
-  console.log("OpenClaw CLI not detected — Standalone Runtime is ready (configure any provider in .env or the Setup Modal).");
-}
-
 run(npmCmd, ["run", "preflight"], { optional: true });
-console.log("\nSetup complete. Start the local IDE with: npm run dev");
-console.log("Open http://127.0.0.1:3000");
+
+console.log("\nSetup complete. Add GEMINI_API_KEY in .env (or via Setup in the UI) and start with:");
+console.log("  npm run dev");
+console.log("Open http://127.0.0.1:3000 (or try 'Explore Sample Investigation' without an API key).");

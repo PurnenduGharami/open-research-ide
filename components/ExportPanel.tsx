@@ -45,7 +45,7 @@ const FORMATS: Array<{
   {
     id: "pdf",
     title: "Print-Ready Report",
-    description: "Paginated PDF generated with clean Apple-style print typography and deterministic timestamps.",
+    description: "Paginated PDF generated with clean editorial print typography and deterministic timestamps.",
     output: "research-report.pdf",
     endpoint: "/api/exports/pdf",
     icon: Printer,
@@ -53,15 +53,15 @@ const FORMATS: Array<{
   {
     id: "latex",
     title: "Academic Manuscript (LaTeX)",
-    description: "Clean editable main.tex and references.bib using @article / @inproceedings entries without raw internal hashes.",
+    description: "Clean editable main.tex and references.bib supporting Article, IEEE, NeurIPS, and Nature venue templates.",
     output: "main.tex + references.bib",
     endpoint: "/api/exports/latex",
     icon: FileText,
   },
   {
     id: "zip",
-    title: "Complete Archive (ZIP)",
-    description: "One-click reproducible dossier bundling HTML, PDF, main.tex, references.bib, and canonical research-project.json.",
+    title: "Complete Archive (RO-Crate ZIP)",
+    description: "Deterministic RO-Crate 1.1 FAIR dossier bundling HTML, PDF, LaTeX, BibTeX, project JSON, ro-crate-metadata.json, and all workspace files.",
     output: "open-research-bundle.zip",
     endpoint: "/api/exports/zip",
     icon: Package,
@@ -165,7 +165,15 @@ export function ExportPanel({ project, onExport, busy, error }: ExportPanelProps
                       <Download size={15} aria-hidden="true" /> Download r{latest.revision}
                     </a>
                     {format.id === "latex" ? (
-                      <a className="exp-download-secondary" href={`/api/exports/bib${projectQuery}`} download>references.bib</a>
+                      <>
+                        <a className="exp-download-secondary" href={`/api/exports/bib${projectQuery}`} download>references.bib</a>
+                        <a className="exp-download-secondary" href={`/api/exports/latex${projectQuery}&template=ieee`} download="main-ieee.tex">IEEE</a>
+                        <a className="exp-download-secondary" href={`/api/exports/latex${projectQuery}&template=neurips`} download="main-neurips.tex">NeurIPS</a>
+                        <a className="exp-download-secondary" href={`/api/exports/latex${projectQuery}&template=nature`} download="main-nature.tex">Nature</a>
+                      </>
+                    ) : null}
+                    {format.id === "zip" ? (
+                      <a className="exp-download-secondary" href={`/api/exports/rocrate${projectQuery}`} download="ro-crate-metadata.json">ro-crate-metadata.json</a>
                     ) : null}
                   </span>
                 ) : (

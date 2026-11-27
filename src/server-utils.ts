@@ -1,4 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
+import { assertSameOriginHeaders } from "./origin-guard.mjs";
 
 export const projectRoot = process.env.OPEN_RESEARCH_ROOT || process.cwd();
 
@@ -8,19 +9,15 @@ export function errorResponse(error: unknown, status = 500) {
   return NextResponse.json({ error: message }, { status: revisionConflict ? 409 : status });
 }
 
-const loopbackHost = (host: string) => /^(?:localhost|127\.0\.0\.1|\[::1\])(?::\d+)?$/i.test(host);
-
 export function requireSameOrigin(request: NextRequest) {
-  const origin = request.headers.get("origin");
-  if (!origin) return;
-  let originUrl: URL;
-  try { originUrl = new URL(origin); } catch { throw new Error("Cross-origin mutations are not allowed"); }
-  const requestHosts = [request.headers.get("host"), request.nextUrl.host].filter((host): host is string => Boolean(host));
-  const sameHost = requestHosts.includes(originUrl.host);
-  const loopbackAlias = loopbackHost(originUrl.host) && requestHosts.some(loopbackHost);
-  if ((!sameHost && !loopbackAlias) || originUrl.protocol !== request.nextUrl.protocol) {
-    throw new Error("Cross-origin mutations are not allowed");
-  }
+  assertSameOriginHeaders({
+    origin: request.headers.get("origin"),
+    host: request.headers.get("host"),
+    forwardedHost: request.headers.get("x-forwarded-host"),
+    forwardedProto: request.headers.get("x-forwarded-proto"),
+    nextUrlHost: request.nextUrl.host,
+    nextUrlProtocol: request.nextUrl.protocol,
+  });
 }
 
 export function boundedText(value: unknown, field: string, min: number, max: number) {

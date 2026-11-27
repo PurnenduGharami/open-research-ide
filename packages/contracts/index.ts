@@ -2,15 +2,83 @@ export type NodeType = "paper" | "evidence" | "contradiction" | "gap" | "hypothe
 export type EdgeType = "supports" | "contradicts" | "identifies" | "addresses" | "tests" | "observed-in" | "reviews" | "conducted-at";
 export type ProjectStatus = "investigating" | "ready" | "error";
 export type RunStatus = "running" | "completed" | "error";
-export type ViewId = "research" | "literature" | "experiments" | "graph" | "manuscript" | "published";
+export type ViewId = "research" | "workspace" | "literature" | "experiments" | "graph" | "manuscript" | "published";
 export type FindingStatus = "supported" | "weak" | "unsupported" | "uncertain" | "concern";
 export type PriceKind = "quoted" | "model-estimated" | "unavailable";
 export type InvestigationMode = "guided" | "autonomous";
 export type ExperimentModality = "computational" | "survey" | "wet-lab" | "hardware" | "observational";
 export type EvidenceVerificationStatus = "unverified" | "verified" | "rejected";
 export type OutcomeVerdict = "supports" | "contradicts" | "inconclusive";
-export type HarnessType = "openclaw" | "standalone";
-export type ProviderType = "cerebras" | "openai-compatible" | "anthropic" | "gemini" | "openrouter" | "ollama";
+export type HarnessType = "standalone";
+export type ProviderType = "gemini" | "vertex" | "gemma-local" | "custom";
+export type ContradictionResolution = "unresolved" | "true-disagreement" | "different-definitions" | "different-conditions";
+export type ReadingStatus = "to-read" | "reading" | "included" | "excluded";
+export type CitationStyle = "apa" | "ieee" | "vancouver" | "harvard1" | "bibtex" | "ris";
+export type LatexTemplate = "article" | "ieee" | "neurips" | "nature";
+export type HypothesisVote = "supports" | "contradicts" | "neutral";
+export type ResearchTaskStage = "ideation" | "literature" | "analysis" | "validation" | "writing" | "submission";
+export type ResearchTaskStatus = "todo" | "in-progress" | "done";
+
+export interface ResearchTask {
+  id: string;
+  title: string;
+  stage: ResearchTaskStage;
+  status: ResearchTaskStatus;
+  priority: "low" | "medium" | "high";
+  linkedNodeIds?: string[];
+  linkedFilePath?: string;
+  notes?: string;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface ResearchIdea {
+  id: string;
+  title: string;
+  notes: string;
+  tags?: string[];
+  status: "spark" | "exploring" | "promoted" | "parked";
+  promotedNodeId?: string;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface WorkspaceFileEntry {
+  path: string;
+  name: string;
+  kind: "file" | "folder";
+  category: "note" | "paper" | "data" | "script" | "figure" | "reference" | "other";
+  size: number;
+  mimeType: string;
+  updatedAt: string;
+  sha256?: string;
+  children?: WorkspaceFileEntry[];
+}
+
+export interface DiagnosticItem {
+  id: string;
+  severity: "error" | "warning" | "info";
+  code: string;
+  message: string;
+  targetView: ViewId;
+  nodeId?: string;
+  filePath?: string;
+}
+
+export interface ContradictionSide {
+  label?: string;
+  paperId?: string;
+  evidenceId?: string;
+  quote?: string;
+  definitionNote?: string;
+}
+
+export interface ContradictionData {
+  description?: string;
+  sides?: ContradictionSide[];
+  resolution?: ContradictionResolution;
+  resolutionNote?: string;
+}
 
 export interface PaperData {
   title?: string;
@@ -26,6 +94,18 @@ export interface PaperData {
   citationCount?: number;
   openAccessUrl?: string;
   publishedDate?: string;
+  fullText?: string;
+  pageCount?: number;
+  pages?: Array<{ page: number; text: string }>;
+  pdfAssetPath?: string;
+  fullTextSha256?: string;
+  readingStatus?: ReadingStatus;
+  exclusionReason?: string;
+  tags?: string[];
+  isRetracted?: boolean;
+  referencedWorkIds?: string[];
+  citedByApiUrl?: string;
+  citeKey?: string;
 }
 
 export interface EvidenceData {
@@ -33,6 +113,9 @@ export interface EvidenceData {
   quote?: string;
   quoteSha256?: string;
   abstractSha256?: string;
+  sourceField?: "abstract" | "fullText";
+  page?: number;
+  fullTextSha256?: string;
   verified?: boolean;
   verificationStatus?: EvidenceVerificationStatus;
   verificationMethod?: string;
@@ -161,7 +244,7 @@ export interface ResultData {
   sourceModality?: ExperimentModality;
 }
 
-export type ResearchNodeData = PaperData & EvidenceData & ReviewData & ExperimentData & LabData & ResultData & Record<string, unknown>;
+export type ResearchNodeData = PaperData & EvidenceData & ContradictionData & ReviewData & ExperimentData & LabData & ResultData & Record<string, unknown>;
 
 export interface ResearchNode {
   id: string;
@@ -310,6 +393,9 @@ export interface ResearchProject {
   assets: ResearchAsset[];
   exports: ResearchExport[];
   commandIds: string[];
+  tasks?: ResearchTask[];
+  ideas?: ResearchIdea[];
+  hypothesisMatrix?: Record<string, Record<string, HypothesisVote>>;
 }
 
 export interface ResearchProjectSummary {
@@ -339,8 +425,8 @@ export interface RuntimeConfigSummary {
   harness: HarnessType;
   orchestrator: RoleModelConfig;
   reviewers: RoleModelConfig;
-  openclawGatewayUrl: string;
-  hasGatewayToken: boolean;
+  vertexProject?: string;
+  vertexLocation?: string;
   providersConfigured: Record<ProviderType, boolean>;
   hasSemanticScholarKey: boolean;
   hasOpenAlexMailto: boolean;
@@ -384,6 +470,7 @@ export interface ExportResult {
   revision: number;
   contentRevision?: number;
   files: Array<{ format: "html" | "pdf" | "latex" | "zip"; path: string; sha256: string; url?: string }>;
+  warnings?: string[];
 }
 
 export interface RecentPaperCard {

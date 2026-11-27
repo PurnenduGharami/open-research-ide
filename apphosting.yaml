@@ -1,0 +1,36 @@
+runConfig:
+  cpu: 1
+  memoryMiB: 1024
+  minInstances: 0
+  maxInstances: 10
+  concurrency: 40
+
+env:
+  - variable: RESEARCH_HARNESS
+    value: standalone
+    availability:
+      - BUILD
+      - RUNTIME
+  - variable: RESEARCH_PROVIDER
+    value: gemini
+    availability:
+      - RUNTIME
+  - variable: RESEARCH_MODEL
+    value: gemini-2.5-flash
+    availability:
+      - RUNTIME
+  - variable: RESEARCH_REVIEW_PROVIDER
+    value: gemini
+    availability:
+      - RUNTIME
+  - variable: RESEARCH_REVIEW_MODEL
+    value: gemini-2.5-flash
+    availability:
+      - RUNTIME
+  # Bind your Google AI Studio key stored in Cloud Secret Manager before deploying:
+  #   npx -y firebase-tools@latest apphosting:secrets:set GEMINI_API_KEY
+  #   npx -y firebase-tools@latest apphosting:secrets:grantaccess GEMINI_API_KEY --backend open-research-ide
+  # - variable: GEMINI_API_KEY
+  #   secret: GEMINI_API_KEY
+  #   availability:
+  #     - RUNTIME

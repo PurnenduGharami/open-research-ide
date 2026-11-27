@@ -1,17 +1,44 @@
 "use client";
 
 import { useEffect, useId, useRef, useState } from "react";
-import { AlertCircle, CheckCircle2, LoaderCircle, Settings2, X } from "lucide-react";
-import type { HarnessType, ProviderType, SetupStatus } from "../packages/contracts";
+import { AlertCircle, CheckCircle2, ExternalLink, LoaderCircle, Settings2, X } from "lucide-react";
+import type { ProviderType, SetupStatus } from "../packages/contracts";
 import { StatusBadge } from "./ui";
 
-const PROVIDERS: Array<{ id: ProviderType; label: string; defaultModel: string; defaultBaseUrl: string }> = [
-  { id: "cerebras", label: "Cerebras (Default)", defaultModel: "cerebras/moonshotai-kimi-k3.1-pro-trial", defaultBaseUrl: "https://api.cerebras.ai/v1" },
-  { id: "openai-compatible", label: "OpenAI / Compatible", defaultModel: "gpt-4.1-mini", defaultBaseUrl: "https://api.openai.com/v1" },
-  { id: "anthropic", label: "Anthropic Claude", defaultModel: "claude-sonnet-4-5", defaultBaseUrl: "https://api.anthropic.com/v1" },
-  { id: "gemini", label: "Google Gemini", defaultModel: "gemini-2.5-flash", defaultBaseUrl: "https://generativelanguage.googleapis.com/v1beta" },
-  { id: "openrouter", label: "OpenRouter", defaultModel: "moonshotai/kimi-k2", defaultBaseUrl: "https://openrouter.ai/api/v1" },
-  { id: "ollama", label: "Local Ollama", defaultModel: "qwen2.5:14b", defaultBaseUrl: "http://127.0.0.1:11434/v1" },
+const PROVIDERS: Array<{
+  id: ProviderType;
+  label: string;
+  defaultModel: string;
+  defaultBaseUrl: string;
+  quickModels?: string[];
+}> = [
+  {
+    id: "gemini",
+    label: "Google Gemini API (Default)",
+    defaultModel: "gemini-2.5-flash",
+    defaultBaseUrl: "https://generativelanguage.googleapis.com/v1beta",
+    quickModels: ["gemini-2.5-flash", "gemini-2.5-pro", "gemini-2.5-flash-lite"],
+  },
+  {
+    id: "vertex",
+    label: "Google Cloud Vertex AI",
+    defaultModel: "gemini-2.5-pro",
+    defaultBaseUrl: "https://aiplatform.googleapis.com/v1/publishers/google",
+    quickModels: ["gemini-2.5-pro", "gemini-2.5-flash"],
+  },
+  {
+    id: "gemma-local",
+    label: "Local Gemma (Ollama)",
+    defaultModel: "gemma3:12b",
+    defaultBaseUrl: "http://127.0.0.1:11434/v1",
+    quickModels: ["gemma3:12b", "gemma3:27b", "gemma3:4b"],
+  },
+  {
+    id: "custom",
+    label: "Custom Compatible Endpoint",
+    defaultModel: "gemini-2.5-flash",
+    defaultBaseUrl: "http://127.0.0.1:8080/v1",
+  },
 ];
 
 export function SetupModal({
@@ -29,30 +56,31 @@ export function SetupModal({
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string>();
 
-  const [harness, setHarness] = useState<HarnessType>("openclaw");
-  const [orchProvider, setOrchProvider] = useState<ProviderType>("cerebras");
-  const [orchModel, setOrchModel] = useState("cerebras/moonshotai-kimi-k3.1-pro-trial");
-  const [orchBaseUrl, setOrchBaseUrl] = useState("https://api.cerebras.ai/v1");
-  const [revProvider, setRevProvider] = useState<ProviderType>("cerebras");
-  const [revModel, setRevModel] = useState("cerebras/moonshotai-kimi-k3.1-pro-trial");
-  const [revBaseUrl, setRevBaseUrl] = useState("https://api.cerebras.ai/v1");
-  const [gatewayUrl, setGatewayUrl] = useState("ws://127.0.0.1:18789");
+  const [orchProvider, setOrchProvider] = useState<ProviderType>("gemini");
+  const [orchModel, setOrchModel] = useState("gemini-2.5-flash");
+  const [orchBaseUrl, setOrchBaseUrl] = useState("https://generativelanguage.googleapis.com/v1beta");
+  const [revProvider, setRevProvider] = useState<ProviderType>("gemini");
+  const [revModel, setRevModel] = useState("gemini-2.5-flash");
+  const [revBaseUrl, setRevBaseUrl] = useState("https://generativelanguage.googleapis.com/v1beta");
+  const [vertexProject, setVertexProject] = useState("");
+  const [vertexLocation, setVertexLocation] = useState("us-central1");
 
-  const [apiKeyInput, setApiKeyInput] = useState("");
+  const [orchKeyInput, setOrchKeyInput] = useState("");
+  const [revKeyInput, setRevKeyInput] = useState("");
   const [s2Key, setS2Key] = useState("");
   const [openAlexMailto, setOpenAlexMailto] = useState("");
 
   const syncFromStatus = (result: SetupStatus) => {
     setStatus(result);
     if (result.config) {
-      setHarness(result.config.harness);
       setOrchProvider(result.config.orchestrator.provider);
       setOrchModel(result.config.orchestrator.model);
       setOrchBaseUrl(result.config.orchestrator.baseUrl || "");
       setRevProvider(result.config.reviewers.provider);
       setRevModel(result.config.reviewers.model);
       setRevBaseUrl(result.config.reviewers.baseUrl || "");
-      setGatewayUrl(result.config.openclawGatewayUrl);
+      setVertexProject(result.config.vertexProject || "");
+      setVertexLocation(result.config.vertexLocation || "us-central1");
     }
   };
 
@@ -81,17 +109,20 @@ export function SetupModal({
     setError(undefined);
     try {
       const secrets: Record<string, string> = {};
-      if (apiKeyInput.trim()) secrets[orchProvider] = apiKeyInput.trim();
+      if (orchKeyInput.trim()) secrets[orchProvider] = orchKeyInput.trim();
+      if (revProvider !== orchProvider && revKeyInput.trim()) secrets[revProvider] = revKeyInput.trim();
       if (s2Key.trim()) secrets.semanticScholarApiKey = s2Key.trim();
       if (openAlexMailto.trim()) secrets.openAlexMailto = openAlexMailto.trim();
       const result = await onSaveConfig({
-        harness,
-        openclawGatewayUrl: gatewayUrl,
+        harness: "standalone",
+        vertexProject,
+        vertexLocation,
         orchestrator: { provider: orchProvider, model: orchModel, baseUrl: orchBaseUrl },
         reviewers: { provider: revProvider, model: revModel, baseUrl: revBaseUrl },
         secrets,
       });
-      setApiKeyInput("");
+      setOrchKeyInput("");
+      setRevKeyInput("");
       setS2Key("");
       syncFromStatus(result);
     } catch (cause) {
@@ -106,19 +137,23 @@ export function SetupModal({
     if (spec && !orchModel) setOrchModel(spec.defaultModel);
   }, [orchProvider, orchModel]);
 
+  const orchSpec = PROVIDERS.find((p) => p.id === orchProvider);
+  const revSpec = PROVIDERS.find((p) => p.id === revProvider);
+  const usesVertex = orchProvider === "vertex" || revProvider === "vertex";
+
   return (
     <>
-      <button type="button" className="ori-btn ori-btn--secondary ori-btn--sm" onClick={open} aria-label="Check setup">
+      <button type="button" className="ori-btn ori-btn--ghost ori-btn--sm" onClick={open} aria-label="Check setup">
         <Settings2 size={14} aria-hidden="true" />
-        <span>{openTriggerLabel}</span>
+        <span className="ori-hide-mobile">{openTriggerLabel}</span>
       </button>
 
       <dialog ref={dialogRef} className="ori-dialog" aria-labelledby={titleId}>
         <div className="ori-dialog-head">
           <div>
-            <h2 id={titleId}>Runtime &amp; Provider Setup</h2>
+            <h2 id={titleId}>Google Gemini &amp; Runtime Setup</h2>
             <p style={{ fontSize: 13, color: "var(--text-secondary)", marginTop: 2 }}>
-              Isolated server-side configuration. Credentials never enter the browser or research context.
+              Direct Standalone Runtime — zero external daemon required. Credentials stay server-side (`0600`).
             </p>
           </div>
           <button type="button" className="ori-icon-btn" onClick={close} aria-label="Close setup">
@@ -127,40 +162,16 @@ export function SetupModal({
         </div>
 
         <div className="ori-dialog-body">
-          <div>
-            <p style={{ fontSize: 13, fontWeight: 600, marginBottom: 8 }}>Execution Harness</p>
-            <div className="ori-mode-cards">
-              <button
-                type="button"
-                className={`ori-mode-card${harness === "openclaw" ? " ori-mode-card--selected" : ""}`}
-                onClick={() => setHarness("openclaw")}
-              >
-                <span className="ori-mode-radio" aria-hidden="true" />
-                <span className="ori-mode-copy">
-                  <strong>OpenClaw Gateway (Default)</strong>
-                  <span>Uses local OpenClaw daemon &amp; plugin isolation.</span>
-                </span>
-              </button>
-              <button
-                type="button"
-                className={`ori-mode-card${harness === "standalone" ? " ori-mode-card--selected" : ""}`}
-                onClick={() => setHarness("standalone")}
-              >
-                <span className="ori-mode-radio" aria-hidden="true" />
-                <span className="ori-mode-copy">
-                  <strong>Direct Standalone Runtime</strong>
-                  <span>Connects directly to any configured provider API.</span>
-                </span>
-              </button>
+          <div className="ori-banner">
+            <CheckCircle2 size={16} style={{ color: "var(--accent)", flexShrink: 0 }} aria-hidden="true" />
+            <div>
+              <strong>Google-Native Standalone Runtime</strong> · Works locally with a{" "}
+              <a href="https://aistudio.google.com/apikey" target="_blank" rel="noreferrer">
+                Google AI Studio API key <ExternalLink size={11} style={{ verticalAlign: "-1px" }} />
+              </a>
+              , Google Cloud Vertex AI, or local Gemma 3 via Ollama.
             </div>
           </div>
-
-          {harness === "openclaw" ? (
-            <div className="ori-field">
-              <label htmlFor="ori-gw-url">OpenClaw Gateway WebSocket URL</label>
-              <input id="ori-gw-url" className="ori-input" value={gatewayUrl} onChange={(e) => setGatewayUrl(e.target.value)} />
-            </div>
-          ) : null}
 
           <div className="ori-grid-2">
             <div className="ori-field">
@@ -182,6 +193,20 @@ export function SetupModal({
             <div className="ori-field">
               <label htmlFor="ori-orch-model">Orchestrator Model ID</label>
               <input id="ori-orch-model" className="ori-input" value={orchModel} onChange={(e) => setOrchModel(e.target.value)} />
+              {orchSpec?.quickModels ? (
+                <div className="ori-triage-row">
+                  {orchSpec.quickModels.map((m) => (
+                    <button
+                      key={m}
+                      type="button"
+                      className={`ori-chip-btn${orchModel === m ? " ori-chip-btn--active" : ""}`}
+                      onClick={() => setOrchModel(m)}
+                    >
+                      {m}
+                    </button>
+                  ))}
+                </div>
+              ) : null}
             </div>
             <div className="ori-field">
               <label htmlFor="ori-rev-provider">Independent Review Panel Provider</label>
@@ -202,26 +227,80 @@ export function SetupModal({
             <div className="ori-field">
               <label htmlFor="ori-rev-model">Review Panel Model ID</label>
               <input id="ori-rev-model" className="ori-input" value={revModel} onChange={(e) => setRevModel(e.target.value)} />
+              {revSpec?.quickModels ? (
+                <div className="ori-triage-row">
+                  {revSpec.quickModels.map((m) => (
+                    <button
+                      key={m}
+                      type="button"
+                      className={`ori-chip-btn${revModel === m ? " ori-chip-btn--active" : ""}`}
+                      onClick={() => setRevModel(m)}
+                    >
+                      {m}
+                    </button>
+                  ))}
+                </div>
+              ) : null}
             </div>
           </div>
 
+          {usesVertex ? (
+            <div className="ori-grid-2">
+              <div className="ori-field">
+                <label htmlFor="ori-vertex-project">Google Cloud Project ID (optional for Express)</label>
+                <input
+                  id="ori-vertex-project"
+                  className="ori-input"
+                  placeholder="my-gcp-research-project"
+                  value={vertexProject}
+                  onChange={(e) => setVertexProject(e.target.value)}
+                />
+              </div>
+              <div className="ori-field">
+                <label htmlFor="ori-vertex-location">Vertex AI Region</label>
+                <input
+                  id="ori-vertex-location"
+                  className="ori-input"
+                  placeholder="us-central1"
+                  value={vertexLocation}
+                  onChange={(e) => setVertexLocation(e.target.value)}
+                />
+              </div>
+            </div>
+          ) : null}
+
           <div className="ori-grid-2">
             <div className="ori-field">
-              <label htmlFor="ori-api-key">API Key for {PROVIDERS.find((p) => p.id === orchProvider)?.label}</label>
+              <label htmlFor="ori-api-key">API Key for {orchSpec?.label}</label>
               <input
                 id="ori-api-key"
                 type="password"
                 className="ori-input"
-                placeholder={status?.config?.providersConfigured?.[orchProvider] ? "Configured (leave blank to keep)" : "Paste key (saved locally 0600)"}
-                value={apiKeyInput}
-                onChange={(e) => setApiKeyInput(e.target.value)}
+                placeholder={orchProvider === "gemma-local" ? "Not required for local Ollama" : status?.config?.providersConfigured?.[orchProvider] ? "Configured (leave blank to keep)" : "Paste key (saved locally 0600)"}
+                value={orchKeyInput}
+                onChange={(e) => setOrchKeyInput(e.target.value)}
+                disabled={orchProvider === "gemma-local"}
               />
             </div>
             <div className="ori-field">
-              <label htmlFor="ori-base-url">Custom Base URL (OpenAI-compatible / Ollama)</label>
+              <label htmlFor="ori-base-url">Endpoint Base URL</label>
               <input id="ori-base-url" className="ori-input" value={orchBaseUrl} onChange={(e) => setOrchBaseUrl(e.target.value)} />
             </div>
           </div>
+
+          {revProvider !== orchProvider && revProvider !== "gemma-local" ? (
+            <div className="ori-field">
+              <label htmlFor="ori-rev-api-key">API Key for {revSpec?.label}</label>
+              <input
+                id="ori-rev-api-key"
+                type="password"
+                className="ori-input"
+                placeholder={status?.config?.providersConfigured?.[revProvider] ? "Configured (leave blank to keep)" : "Paste reviewer provider key"}
+                value={revKeyInput}
+                onChange={(e) => setRevKeyInput(e.target.value)}
+              />
+            </div>
+          ) : null}
 
           <div className="ori-grid-2">
             <div className="ori-field">

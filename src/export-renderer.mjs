@@ -1,8 +1,9 @@
 import { createHash } from "node:crypto";
-import { mkdir, writeFile } from "node:fs/promises";
+import { mkdir, readFile, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { chromium } from "playwright";
 import { projectExportsDir, projectSchema, readProject } from "../plugins/research-engine/engine.mjs";
+import { collectAllWorkspaceFilesFlat } from "./workspace-files.mjs";
 
 const TYPES = ["paper", "evidence", "contradiction", "gap", "hypothesis", "experiment", "result", "review", "lab"];
 const TYPE_LABELS = {
@@ -116,17 +117,17 @@ function renderGraphSvg(project) {
     const s = coords.get(edge.source);
     const t = coords.get(edge.target);
     if (!s || !t) return "";
-    const stroke = edge.type === "contradicts" ? "#b34b43" : edge.type === "supports" ? "#0066cc" : "#7a7a7a";
+    const stroke = edge.type === "contradicts" ? "#b91c1c" : edge.type === "supports" ? "#1e4fc2" : "#787e88";
     return `<line x1="${s.x + boxW}" y1="${s.cy}" x2="${t.x}" y2="${t.cy}" stroke="${stroke}" stroke-width="1.5" opacity="0.75" />`;
   }).join("");
   const nodesSvg = project.nodes.map((node) => {
     const pos = coords.get(node.id);
     if (!pos) return "";
-    const border = node.type === "contradiction" ? "#b34b43" : node.type === "hypothesis" || node.type === "experiment" ? "#0066cc" : "#e0e0e0";
+    const border = node.type === "contradiction" ? "#b91c1c" : node.type === "hypothesis" || node.type === "experiment" ? "#1e4fc2" : "#e6e6e2";
     const label = node.title.length > 26 ? `${node.title.slice(0, 25)}…` : node.title;
-    return `<g><rect x="${pos.x}" y="${pos.y}" width="${boxW}" height="${boxH}" rx="11" fill="#ffffff" stroke="${border}" stroke-width="1.2" /><text x="${pos.x + 10}" y="${pos.y + 18}" font-size="9" font-weight="600" fill="#7a7a7a">${html(TYPE_LABELS[node.type][0].toUpperCase())}</text><text x="${pos.x + 10}" y="${pos.y + 36}" font-size="11" font-weight="600" fill="#1d1d1f">${html(label)}</text></g>`;
+    return `<g><rect x="${pos.x}" y="${pos.y}" width="${boxW}" height="${boxH}" rx="11" fill="#ffffff" stroke="${border}" stroke-width="1.2" /><text x="${pos.x + 10}" y="${pos.y + 18}" font-size="9" font-weight="600" fill="#787e88">${html(TYPE_LABELS[node.type][0].toUpperCase())}</text><text x="${pos.x + 10}" y="${pos.y + 36}" font-size="11" font-weight="600" fill="#111315">${html(label)}</text></g>`;
   }).join("");
-  return `<div class="svg-wrap"><svg viewBox="0 0 ${width} ${height}" width="100%" role="img" aria-label="Knowledge graph diagram with ${project.nodes.length} nodes and ${project.edges.length} edges"><rect width="${width}" height="${height}" rx="18" fill="#f5f5f7" />${edgesSvg}${nodesSvg}</svg></div>`;
+  return `<div class="svg-wrap"><svg viewBox="0 0 ${width} ${height}" width="100%" role="img" aria-label="Knowledge graph diagram with ${project.nodes.length} nodes and ${project.edges.length} edges"><rect width="${width}" height="${height}" rx="18" fill="#f5f5f3" />${edgesSvg}${nodesSvg}</svg></div>`;
 }
 
 function renderMetricComparisonHtml(node) {
@@ -153,6 +154,13 @@ function dataFields(data, node) {
   }).join("")}</dl>`;
 }
 
+function renderContradictionSidesHtml(node) {
+  const sides = Array.isArray(node.data?.sides) ? node.data.sides : [];
+  if (!sides.length) return "";
+  const resolution = typeof node.data?.resolution === "string" ? node.data.resolution : "unresolved";
+  return `<p class="meta">Triage: <strong>${html(resolution.replace(/-/g, " "))}</strong></p><div class="sides-grid">${sides.map((side, idx) => `<div class="side-box"><strong>${html(side.label || `Study ${idx + 1}`)}</strong>${side.quote ? `<blockquote>&ldquo;${html(side.quote)}&rdquo;</blockquote>` : ""}${side.definitionNote ? `<p class="meta">${html(side.definitionNote)}</p>` : ""}</div>`).join("")}</div>`;
+}
+
 function renderNode(node, index) {
   const status = nodeStatus(node);
   return `<article class="artifact" id="artifact-${index}" data-type="${html(node.type)}" data-node-id="${html(node.id)}">
@@ -160,6 +168,7 @@ function renderNode(node, index) {
     ${status ? `<p class="badge ${status.kind}">${html(status.text)}</p>` : ""}
     <p class="meta"><code>${html(node.id)}</code> · Updated <time datetime="${html(node.updatedAt)}">${html(node.updatedAt)}</time></p>
     ${node.sourceRefs.length ? `<p class="meta">Source references: ${html(node.sourceRefs.join(", "))}</p>` : ""}
+    ${node.type === "contradiction" ? renderContradictionSidesHtml(node) : ""}
     ${node.type === "result" ? renderMetricComparisonHtml(node) : ""}
     ${dataFields(node.data, node)}
   </article>`;
@@ -176,9 +185,9 @@ function optionalSection(id, title, records, renderer) {
 }
 
 const CSS = `
-:root{color-scheme:light;--canvas:#ffffff;--parchment:#f5f5f7;--pearl:#fafafc;--ink:#1d1d1f;--muted:#333333;--tertiary:#7a7a7a;--line:#e0e0e0;--soft:#f0f0f0;--primary:#0066cc;--primary-focus:#0071e3;--warning:#8a5300;--warning-soft:#fff6e6;font-family:"SF Pro Text",system-ui,-apple-system,BlinkMacSystemFont,sans-serif;font-size:17px;line-height:1.47;letter-spacing:-0.374px;color:var(--ink);background:var(--canvas)}
-*{box-sizing:border-box}html{scroll-behavior:smooth;scroll-padding-top:24px}body{margin:0}a{color:var(--primary);text-underline-offset:3px}a:focus-visible,button:focus-visible,input:focus-visible,select:focus-visible{outline:2px solid var(--primary-focus);outline-offset:2px}code,pre{font-family:ui-monospace,"SFMono-Regular",monospace;font-size:13px;letter-spacing:0}code{overflow-wrap:anywhere}.shell{width:min(980px,calc(100% - 48px));margin:0 auto}.report-header{padding:64px 0 40px;background:var(--parchment)}.brand{font-size:14px;font-weight:600;color:var(--primary);letter-spacing:-0.224px;margin-bottom:16px}.report-header h1{font-family:"SF Pro Display",system-ui,-apple-system,sans-serif;font-size:clamp(34px,5vw,48px);font-weight:600;line-height:1.08;letter-spacing:-0.28px;max-width:24ch;margin:0 0 16px}.meta{color:var(--tertiary);font-size:14px;line-height:1.43;letter-spacing:-0.224px}.revision{display:inline-block;border:1px solid var(--line);border-radius:9999px;background:var(--canvas);color:var(--primary);padding:4px 12px;font-weight:600;margin-right:8px}.navigation{border-bottom:1px solid var(--line);background:var(--canvas);position:sticky;top:0;z-index:10}.navigation ul{display:flex;gap:8px;list-style:none;padding:10px 0;margin:0;overflow-x:auto}.navigation a{display:block;padding:6px 12px;border-radius:9999px;text-decoration:none;color:var(--muted);font-size:14px;white-space:nowrap}.navigation a:hover{background:var(--parchment);color:var(--primary)}main{padding:40px 0 64px}section{margin:0 0 48px}h2{font-family:"SF Pro Display",system-ui,-apple-system,sans-serif;font-size:34px;font-weight:600;line-height:1.18;letter-spacing:-0.374px;margin:0 0 20px}h3{font-size:21px;font-weight:600;line-height:1.25;letter-spacing:-0.2px;margin:0}.curiosity{font-size:24px;font-weight:300;line-height:1.45;letter-spacing:0;margin:0 0 16px}.filters{padding:24px;background:var(--parchment);border-radius:18px}.filter-row{display:grid;grid-template-columns:minmax(180px,1fr) minmax(160px,.45fr) auto auto;gap:12px;align-items:end}.control label{display:block;font-size:14px;font-weight:600;margin-bottom:6px}.control input,.control select{width:100%;height:44px;border:1px solid var(--line);border-radius:9999px;background:var(--canvas);padding:10px 18px;color:var(--ink);font-size:15px}button{min-height:44px;border:1px solid var(--primary);border-radius:9999px;padding:10px 20px;background:var(--primary);color:#fff;font-size:14px;font-weight:400;cursor:pointer}button#clear-filters{background:var(--canvas);color:var(--primary)}button:active{transform:scale(0.95)}.filter-status{display:block;color:var(--tertiary);font-size:14px;margin-top:12px}.artifact{padding:24px;margin-bottom:16px;border:1px solid var(--line);border-radius:18px;background:var(--canvas);overflow-wrap:anywhere}.artifact-heading{display:flex;justify-content:space-between;align-items:start;gap:16px;margin-bottom:8px}.type{color:var(--tertiary);font-size:12px;font-weight:600;text-transform:uppercase;letter-spacing:0.04em;white-space:nowrap}.badge{display:inline-block;padding:4px 12px;border-radius:9999px;font-size:12px;font-weight:600;margin:4px 0 10px}.badge.warning{color:var(--warning);background:var(--warning-soft)}.badge.verified{color:var(--primary);background:#edf5ff}.fields{margin:16px 0 0}.field{display:grid;grid-template-columns:minmax(140px,220px) minmax(0,1fr);gap:16px;padding:10px 0;border-top:1px solid var(--soft)}.field dt{font-size:14px;font-weight:600;color:var(--tertiary)}.field dd{margin:0;min-width:0;font-size:15px;white-space:pre-wrap}.field pre{white-space:pre-wrap;overflow:auto;max-height:420px;margin:0;padding:12px;background:var(--parchment);border-radius:11px}.svg-wrap{margin:16px 0 24px;overflow-x:auto}.metric-table{width:100%;border-collapse:collapse;margin:16px 0;font-size:14px}.metric-table th,.metric-table td{padding:10px 12px;border-bottom:1px solid var(--line);text-align:left}.metric-table th{color:var(--tertiary);font-weight:600}.manuscript-block{padding:28px;background:var(--parchment);border-radius:18px;margin-bottom:24px}.manuscript-block p{white-space:pre-wrap;margin:12px 0}.record-list{list-style:none;padding:0;margin:0}.record-list>li{padding:16px 0;border-top:1px solid var(--line)}.report-footer{padding:40px 0;background:var(--parchment);color:var(--tertiary);font-size:12px}[hidden]{display:none!important}
-@media(max-width:700px){.filter-row{grid-template-columns:1fr}.field{grid-template-columns:1fr;gap:4px}}
+:root{color-scheme:light;--canvas:#fcfcfb;--parchment:#f5f5f3;--pearl:#ffffff;--ink:#111315;--muted:#525760;--tertiary:#787e88;--line:#e6e6e2;--soft:#efefec;--primary:#1e4fc2;--primary-focus:#173f9e;--warning:#92400e;--warning-soft:#fffbeb;font-family:system-ui,-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;font-size:17px;line-height:1.47;letter-spacing:-0.011em;color:var(--ink);background:var(--canvas)}
+*{box-sizing:border-box}html{scroll-behavior:smooth;scroll-padding-top:24px}body{margin:0}a{color:var(--primary);text-underline-offset:3px}a:focus-visible,button:focus-visible,input:focus-visible,select:focus-visible{outline:2px solid var(--primary-focus);outline-offset:2px}code,pre{font-family:ui-monospace,"SFMono-Regular",monospace;font-size:13px;letter-spacing:0}code{overflow-wrap:anywhere}.shell{width:min(980px,calc(100% - 48px));margin:0 auto}.report-header{padding:64px 0 40px;background:var(--parchment)}.brand{font-size:14px;font-weight:600;color:var(--primary);letter-spacing:-0.01em;margin-bottom:16px}.report-header h1{font-family:Georgia,"Times New Roman",serif;font-size:clamp(34px,5vw,48px);font-weight:400;line-height:1.08;letter-spacing:-0.02em;max-width:24ch;margin:0 0 16px}.meta{color:var(--tertiary);font-size:14px;line-height:1.43}.revision{display:inline-block;border:1px solid var(--line);border-radius:9999px;background:var(--pearl);color:var(--primary);padding:4px 12px;font-weight:600;margin-right:8px}.navigation{border-bottom:1px solid var(--line);background:var(--pearl);position:sticky;top:0;z-index:10}.navigation ul{display:flex;gap:8px;list-style:none;padding:10px 0;margin:0;overflow-x:auto}.navigation a{display:block;padding:6px 12px;border-radius:9999px;text-decoration:none;color:var(--muted);font-size:14px;white-space:nowrap}.navigation a:hover{background:var(--parchment);color:var(--primary)}main{padding:40px 0 64px}section{margin:0 0 48px}h2{font-family:Georgia,"Times New Roman",serif;font-size:32px;font-weight:400;line-height:1.18;letter-spacing:-0.015em;margin:0 0 20px}h3{font-size:20px;font-weight:600;line-height:1.25;letter-spacing:-0.01em;margin:0}.curiosity{font-size:22px;font-weight:400;line-height:1.45;margin:0 0 16px}.filters{padding:24px;background:var(--parchment);border-radius:14px}.filter-row{display:grid;grid-template-columns:minmax(180px,1fr) minmax(160px,.45fr) auto auto;gap:12px;align-items:end}.control label{display:block;font-size:14px;font-weight:600;margin-bottom:6px}.control input,.control select{width:100%;height:44px;border:1px solid var(--line);border-radius:9999px;background:var(--pearl);padding:10px 18px;color:var(--ink);font-size:15px}button{min-height:44px;border:1px solid var(--primary);border-radius:9999px;padding:10px 20px;background:var(--primary);color:#fff;font-size:14px;font-weight:500;cursor:pointer}button#clear-filters{background:var(--pearl);color:var(--primary)}button:active{transform:scale(0.97)}.filter-status{display:block;color:var(--tertiary);font-size:14px;margin-top:12px}.artifact{padding:24px;margin-bottom:16px;border:1px solid var(--line);border-radius:14px;background:var(--pearl);overflow-wrap:anywhere}.artifact-heading{display:flex;justify-content:space-between;align-items:start;gap:16px;margin-bottom:8px}.type{color:var(--tertiary);font-size:12px;font-weight:600;text-transform:uppercase;letter-spacing:0.04em;white-space:nowrap}.badge{display:inline-block;padding:4px 12px;border-radius:9999px;font-size:12px;font-weight:600;margin:4px 0 10px}.badge.warning{color:var(--warning);background:var(--warning-soft)}.badge.verified{color:var(--primary);background:rgba(30,79,194,0.08)}.sides-grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:12px;margin:12px 0}.side-box{padding:12px 14px;border-radius:10px;border:1px solid var(--line);background:var(--parchment)}.side-box blockquote{margin:8px 0;font-size:14px;color:var(--ink)}.fields{margin:16px 0 0}.field{display:grid;grid-template-columns:minmax(140px,220px) minmax(0,1fr);gap:16px;padding:10px 0;border-top:1px solid var(--soft)}.field dt{font-size:14px;font-weight:600;color:var(--tertiary)}.field dd{margin:0;min-width:0;font-size:15px;white-space:pre-wrap}.field pre{white-space:pre-wrap;overflow:auto;max-height:420px;margin:0;padding:12px;background:var(--parchment);border-radius:11px}.svg-wrap{margin:16px 0 24px;overflow-x:auto}.metric-table{width:100%;border-collapse:collapse;margin:16px 0;font-size:14px}.metric-table th,.metric-table td{padding:10px 12px;border-bottom:1px solid var(--line);text-align:left}.metric-table th{color:var(--tertiary);font-weight:600}.manuscript-block{padding:28px;background:var(--parchment);border-radius:14px;margin-bottom:24px}.manuscript-block p{white-space:pre-wrap;margin:12px 0}.record-list{list-style:none;padding:0;margin:0}.record-list>li{padding:16px 0;border-top:1px solid var(--line)}.report-footer{padding:40px 0;background:var(--parchment);color:var(--tertiary);font-size:12px}[hidden]{display:none!important}
+@media(max-width:700px){.filter-row,.sides-grid{grid-template-columns:1fr}.field{grid-template-columns:1fr;gap:4px}}
 @page{size:A4;margin:18mm 16mm 20mm}
 @media print{:root{background:#fff;font-size:11px;letter-spacing:0}.shell{width:100%}.report-header{padding:0 0 16px;background:#fff}.navigation,.filters,.report-footer{display:none}.artifact{break-inside:avoid-page;padding:14px}}
 `;
@@ -284,8 +293,52 @@ function bibEntryType(paperData) {
   return "article";
 }
 
-export function renderProjectLatex(input) {
+function latexPreambleForTemplate(template = "article") {
+  if (template === "ieee") {
+    return `\\documentclass[conference]{IEEEtran}
+\\usepackage[T1]{fontenc}
+\\usepackage[utf8]{inputenc}
+\\usepackage[hidelinks]{hyperref}
+\\usepackage{enumitem}
+\\setlist{description}{style=nextline,leftmargin=0pt}`;
+  }
+  if (template === "neurips") {
+    return `\\documentclass[10pt]{article}
+\\usepackage[T1]{fontenc}
+\\usepackage[utf8]{inputenc}
+\\usepackage[letterpaper,top=1in,bottom=1in,left=1.25in,right=1.25in]{geometry}
+\\usepackage{times}
+\\usepackage[hidelinks]{hyperref}
+\\usepackage{enumitem}
+\\setlist{description}{style=nextline,leftmargin=0pt}
+\\setlength{\\parindent}{0pt}
+\\setlength{\\parskip}{5.5pt}`;
+  }
+  if (template === "nature") {
+    return `\\documentclass[11pt]{article}
+\\usepackage[T1]{fontenc}
+\\usepackage[utf8]{inputenc}
+\\usepackage[a4paper,margin=20mm]{geometry}
+\\usepackage[hidelinks]{hyperref}
+\\usepackage{enumitem}
+\\setlist{description}{style=nextline,leftmargin=0pt}
+\\setlength{\\parindent}{0pt}
+\\setlength{\\parskip}{6pt}`;
+  }
+  return `\\documentclass[11pt]{article}
+\\usepackage[T1]{fontenc}
+\\usepackage[utf8]{inputenc}
+\\usepackage[a4paper,margin=22mm]{geometry}
+\\usepackage[hidelinks]{hyperref}
+\\usepackage{enumitem}
+\\setlist{description}{style=nextline,leftmargin=0pt}
+\\setlength{\\parindent}{0pt}
+\\setlength{\\parskip}{6pt}`;
+}
+
+export function renderProjectLatex(input, options = {}) {
   const project = projectSchema.parse(input);
+  const template = ["article", "ieee", "neurips", "nature"].includes(options.template) ? options.template : "article";
   const papers = project.nodes.filter((node) => node.type === "paper");
   const citationKeys = new Map(papers.map((node, index) => [node.id, `paper_${index + 1}`]));
 
@@ -325,15 +378,8 @@ export function renderProjectLatex(input) {
     return `@${entryType}{${citationKeys.get(node.id)},\n${fields.join(",\n")}\n}`;
   }).join("\n\n") + "\n" : "% No paper records are present in this canonical revision.\n";
 
-  const mainTex = `\\documentclass[11pt]{article}
-\\usepackage[T1]{fontenc}
-\\usepackage[utf8]{inputenc}
-\\usepackage[a4paper,margin=22mm]{geometry}
-\\usepackage[hidelinks]{hyperref}
-\\usepackage{enumitem}
-\\setlist{description}{style=nextline,leftmargin=0pt}
-\\setlength{\\parindent}{0pt}
-\\setlength{\\parskip}{6pt}
+  const bibStyle = template === "ieee" ? "IEEEtran" : template === "nature" ? "unsrt" : "plain";
+  const mainTex = `${latexPreambleForTemplate(template)}
 \\title{${latex(project.title)}\\\\ Canonical revision ${project.revision}}
 \\author{Open Research IDE --- Local-First Scientific Record}
 \\date{Canonical state updated ${latex(project.updatedAt)}}
@@ -348,11 +394,48 @@ ${nodeSections || "\\section{Research artifacts}\n\\emph{No research artifacts a
 \\section{Knowledge graph}
 ${project.edges.length ? `\\begin{itemize}\n${project.edges.map((edge) => `  \\item \\textbf{${latex(edge.label)}}: \\texttt{${latex(edge.source)}} $\\rightarrow$ \\texttt{${latex(edge.target)}} (${latex(edge.type)})`).join("\n")}\n\\end{itemize}` : "\\emph{No semantic edges are recorded at this revision.}"}
 \\nocite{*}
-\\bibliographystyle{plain}
+\\bibliographystyle{${bibStyle}}
 \\bibliography{references}
 \\end{document}
 `;
   return { mainTex, referencesBib: references };
+}
+
+export function buildRoCrateMetadata(project, extraParts = []) {
+  const valid = projectSchema.parse(project);
+  const baseParts = [
+    { "@id": "research-report.html" },
+    { "@id": "latex/main.tex" },
+    { "@id": "latex/references.bib" },
+    { "@id": "research-project.json" },
+    ...extraParts.map((item) => ({ "@id": item.path })),
+  ];
+  const entities = [
+    {
+      "@id": "ro-crate-metadata.json",
+      "@type": "CreativeWork",
+      conformsTo: { "@id": "https://w3id.org/ro/crate/1.1" },
+      about: { "@id": "./" },
+    },
+    {
+      "@id": "./",
+      "@type": "Dataset",
+      name: valid.title,
+      description: valid.curiosity,
+      datePublished: valid.updatedAt,
+      license: { "@id": "https://opensource.org/licenses/MIT" },
+      hasPart: baseParts,
+    },
+    ...extraParts.map((item) => ({
+      "@id": item.path,
+      "@type": "File",
+      name: path.basename(item.path),
+      encodingFormat: item.mimeType || "application/octet-stream",
+      contentSize: String(item.size ?? 0),
+      ...(item.sha256 ? { sha256: item.sha256 } : {}),
+    })),
+  ];
+  return `${JSON.stringify({ "@context": "https://w3id.org/ro/crate/1.1/context", "@graph": entities }, null, 2)}\n`;
 }
 
 function canonicalPdfDate(value) {
@@ -476,20 +559,41 @@ export async function exportProject(root = process.cwd(), projectId) {
   if (!project) throw new Error(`No canonical research project found at ${path.join(resolvedRoot, "workspace", "research-project.json")}`);
   const htmlDocument = renderProjectHtml(project);
   const { mainTex, referencesBib } = renderProjectLatex(project);
-  const pdf = await renderProjectPdf(htmlDocument, project.updatedAt);
+  const warnings = [];
+  let pdf = null;
+  try {
+    pdf = await renderProjectPdf(htmlDocument, project.updatedAt);
+  } catch (error) {
+    warnings.push(`PDF export skipped (Chromium headless binary unavailable): ${error instanceof Error ? error.message : String(error)}`);
+  }
   const canonicalJson = `${JSON.stringify(project, null, 2)}\n`;
-  const zip = buildZipArchive([
+  const workspaceFlat = await collectAllWorkspaceFilesFlat(resolvedRoot, project.projectId).catch(() => []);
+  const workspaceEntries = await Promise.all(
+    workspaceFlat.map(async (f) => ({
+      path: `files/${f.relPath}`,
+      mimeType: f.mimeType,
+      size: f.size,
+      sha256: f.sha256,
+      data: await readFile(f.absPath),
+    })),
+  );
+  const roCrateJson = buildRoCrateMetadata(project, workspaceEntries);
+
+  const zipEntries = [
     { name: "research-report.html", data: htmlDocument },
-    { name: "research-report.pdf", data: pdf },
+    ...(pdf ? [{ name: "research-report.pdf", data: pdf }] : []),
     { name: "latex/main.tex", data: mainTex },
     { name: "latex/references.bib", data: referencesBib },
     { name: "research-project.json", data: canonicalJson },
-  ], project.updatedAt);
+    { name: "ro-crate-metadata.json", data: roCrateJson },
+    ...workspaceEntries.map((entry) => ({ name: entry.path, data: entry.data })),
+  ];
+  const zip = buildZipArchive(zipEntries, project.updatedAt);
 
   const outputRoot = projectId ? projectExportsDir(resolvedRoot, projectId) : path.join(resolvedRoot, "workspace", "exports");
   const targets = [
     { format: "html", path: path.join(outputRoot, "research-report.html"), value: htmlDocument },
-    { format: "pdf", path: path.join(outputRoot, "pdf", "research-report.pdf"), value: pdf },
+    ...(pdf ? [{ format: "pdf", path: path.join(outputRoot, "pdf", "research-report.pdf"), value: pdf }] : []),
     { format: "latex", path: path.join(outputRoot, "latex", "main.tex"), value: mainTex },
     { format: "latex", path: path.join(outputRoot, "latex", "references.bib"), value: referencesBib },
     { format: "zip", path: path.join(outputRoot, "research-bundle.zip"), value: zip },
@@ -516,5 +620,6 @@ export async function exportProject(root = process.cwd(), projectId) {
       path: path.relative(resolvedRoot, target.path).split(path.sep).join("/"),
       sha256: digest(target.value),
     })),
+    ...(warnings.length ? { warnings } : {}),
   };
 }

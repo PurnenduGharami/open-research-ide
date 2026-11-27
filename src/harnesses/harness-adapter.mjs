@@ -1,10 +1,10 @@
 import { randomUUID } from "node:crypto";
 import { readFile } from "node:fs/promises";
 import path from "node:path";
+import { fileURLToPath } from "node:url";
 import { executeResearchCommand, readProject } from "../../plugins/research-engine/engine.mjs";
 import { literatureNodes, searchLiterature } from "../../plugins/research-engine/literature.mjs";
 import { discoverLabsFromDois, labNodesFromDiscovery } from "../../plugins/research-engine/labs.mjs";
-import { getGateway, preflight as openClawPreflight, sendTurn as openClawSendTurn } from "../gateway.mjs";
 import { checkProviderHealth, invokeModelProvider, withExponentialBackoff } from "../providers/model-provider.mjs";
 import { getPublicRuntimeConfig, readRuntimeConfig } from "../runtime-config.mjs";
 
@@ -16,7 +16,7 @@ const STANDALONE_TOOLS = [
       type: "object",
       properties: {
         query: { type: "string", description: "Concise scientific search keywords" },
-        limit: { type: "integer", minimum: 1, maximum: 20, description: "Max papers to retrieve (default 6)" },
+        limit: { type: "integer", description: "Max papers to retrieve (1-20, default 6)" },
       },
       required: ["query"],
     },
@@ -27,8 +27,8 @@ const STANDALONE_TOOLS = [
     parameters: {
       type: "object",
       properties: {
-        dois: { type: "array", items: { type: "string" } },
-        limit: { type: "integer", minimum: 1, maximum: 20 },
+        dois: { type: "array", items: { type: "string" }, description: "Paper DOIs to trace institutions from" },
+        limit: { type: "integer", description: "Max institutions to return (default 6)" },
       },
     },
   },
@@ -39,13 +39,25 @@ const STANDALONE_TOOLS = [
   },
   {
     name: "research_project_commit",
-    description: "Commit typed evidence, contradiction, gap, hypothesis, experiment, and lab nodes + edges + blocks. Evidence must exactly quote a paper abstract.",
+    description: "Commit typed evidence, contradiction (with data.sides comparing both papers/quotes), gap, hypothesis, experiment, and lab nodes + edges + blocks. Evidence must exactly quote a paper abstract.",
     parameters: {
       type: "object",
       properties: {
-        nodes: { type: "array", items: { type: "object" } },
-        edges: { type: "array", items: { type: "object" } },
-        blocks: { type: "array", items: { type: "object" } },
+        nodes: {
+          type: "array",
+          description: "Research nodes to upsert (evidence, contradiction, gap, hypothesis, experiment, lab).",
+          items: { type: "object" },
+        },
+        edges: {
+          type: "array",
+          description: "Typed edges (supports, contradicts, identifies, addresses, tests, conducted-at).",
+          items: { type: "object" },
+        },
+        blocks: {
+          type: "array",
+          description: "UI blocks referencing committed node IDs.",
+          items: { type: "object" },
+        },
         status: { type: "string", enum: ["investigating", "ready", "error"] },
         message: { type: "string" },
       },
@@ -171,169 +183,132 @@ const AGENT_PROMPT_FILES = {
   "research-feasibility": "agents/goldfish-feasibility/AGENTS.md",
 };
 
+const PACKAGE_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../..");
+
 async function loadAgentPrompt(root, agentId) {
   const relative = AGENT_PROMPT_FILES[agentId] || AGENT_PROMPT_FILES.research;
-  try {
-    return await readFile(/* turbopackIgnore: true */ path.join(/* turbopackIgnore: true */ root, relative), "utf8");
-  } catch {
-    return "You are a rigorous scientific research assistant. Never fabricate citations, quotes, or experimental results.";
+  for (const baseDir of [root, PACKAGE_ROOT]) {
+    try {
+      return await readFile(/* turbopackIgnore: true */ path.join(/* turbopackIgnore: true */ baseDir, relative), "utf8");
+    } catch { /* Try package root fallback. */ }
   }
+  return "You are a rigorous scientific research assistant. Never fabricate citations, quotes, or experimental results.";
 }
 
-export function createHarnessAdapter(runtimeConfig, root) {
-  if (runtimeConfig.harness === "standalone") {
-    const sessions = new Map();
-    const controllers = new Map();
-    return {
-      kind: "standalone",
-      async createSession({ agentId, label, requestedKey }) {
-        const key = requestedKey || `standalone-${label}-${randomUUID()}`;
-        sessions.set(key, { agentId, history: [] });
-        return key;
-      },
-      async sendTurn({ sessionKey, agentId, projectId, message, idempotencyKey, onDelta, onRetry, onTool }) {
-        const isReviewer = agentId !== "research" && agentId !== (process.env.RESEARCH_AGENT_ID || "research");
-        const roleConfig = isReviewer ? runtimeConfig.reviewers : runtimeConfig.orchestrator;
-        const system = await loadAgentPrompt(root, agentId);
-        const session = sessions.get(sessionKey) || { agentId, history: [] };
-        sessions.set(sessionKey, session);
-        const controller = new AbortController();
-        controllers.set(sessionKey, controller);
-
-        const conversation = isReviewer
-          ? [{ role: "user", content: message }]
-          : [...session.history, { role: "user", content: message }];
-
-        const startedAt = Date.now();
-        let totalIn = 0;
-        let totalOut = 0;
-        let hasUsage = false;
-        let finalText = "";
-
-        try {
-          const maxSteps = isReviewer ? 1 : 8;
-          for (let step = 0; step < maxSteps; step += 1) {
-            const response = await withExponentialBackoff(
-              () => invokeModelProvider({
-                roleConfig,
-                runtimeConfig,
-                system,
-                messages: conversation,
-                tools: isReviewer ? [] : STANDALONE_TOOLS,
-                onDelta,
-                signal: controller.signal,
-              }),
-              { maxRetries: 3, baseDelayMs: 1000, onRetry, signal: controller.signal },
-            );
-            if (response.usage) {
-              hasUsage = true;
-              totalIn += Number(response.usage.inputTokens || 0);
-              totalOut += Number(response.usage.outputTokens || 0);
-            }
-            if (response.text) finalText = response.text;
-            if (isReviewer || !response.toolCalls?.length) {
-              conversation.push({ role: "assistant", content: response.text || "" });
-              break;
-            }
-            conversation.push({ role: "assistant", content: response.text || "", toolCalls: response.toolCalls });
-            for (const call of response.toolCalls) {
-              onTool?.(call.name);
-              let toolOutput;
-              try {
-                toolOutput = await executeStandaloneTool(root, projectId, call);
-              } catch (error) {
-                toolOutput = JSON.stringify({ error: String(error?.message || error) });
-              }
-              conversation.push({ role: "tool", toolCallId: call.id, toolName: call.name, content: toolOutput });
-            }
-          }
-          if (!isReviewer) session.history = conversation.slice(-24);
-          return {
-            runId: idempotencyKey || randomUUID(),
-            text: finalText,
-            usage: hasUsage ? { inputTokens: totalIn, outputTokens: totalOut } : undefined,
-            durationMs: Date.now() - startedAt,
-          };
-        } finally {
-          controllers.delete(sessionKey);
-        }
-      },
-      async abortSession(sessionKey) {
-        controllers.get(sessionKey)?.abort();
-        controllers.delete(sessionKey);
-      },
-      async preflight() {
-        const [orch, rev] = await Promise.all([
-          checkProviderHealth(runtimeConfig.orchestrator, runtimeConfig),
-          checkProviderHealth(runtimeConfig.reviewers, runtimeConfig),
-        ]);
-        const checks = [
-          { id: "harness", label: "Execution harness", ok: true, detail: "Direct Standalone Runtime (no external gateway required)" },
-          { id: "orchestrator", label: "Research Orchestrator model", ok: orch.ok, detail: orch.detail },
-          { id: "reviewers", label: "Independent Review Panel model", ok: rev.ok, detail: rev.detail },
-        ];
-        return {
-          ok: checks.every((c) => c.ok),
-          harness: "standalone",
-          config: getPublicRuntimeConfig(runtimeConfig),
-          checks,
-          note: "Non-generative check: no research session or model request was created.",
-        };
-      },
-    };
-  }
-
+export function createHarnessAdapter(runtimeConfig, root, options = {}) {
+  const sessions = new Map();
+  const controllers = new Map();
   return {
-    kind: "openclaw",
-    async createSession({ agentId, label, requestedKey, model }) {
-      const key = requestedKey || `research-${label}-${randomUUID()}`;
-      const gateway = await getGateway();
-      const created = await gateway.request("sessions.create", {
-        key,
-        agentId,
-        model: model || runtimeConfig.orchestrator.model,
-        thinkingLevel: "off",
-        displayName: `Open Research IDE — ${label}`,
-      });
-      return created?.sessionKey || created?.key || key;
+    kind: "standalone",
+    async createSession({ agentId, label, requestedKey }) {
+      const key = requestedKey || `standalone-${label}-${randomUUID()}`;
+      sessions.set(key, { agentId, history: [] });
+      return key;
     },
-    async sendTurn({ sessionKey, agentId, message, idempotencyKey, onDelta, onRetry, signal }) {
-      return withExponentialBackoff(
-        () => openClawSendTurn({ sessionKey, agentId, message, idempotencyKey, onDelta }),
-        { maxRetries: 3, baseDelayMs: 1000, onRetry, signal },
-      );
+    async sendTurn({ sessionKey, agentId, projectId, message, idempotencyKey, onDelta, onRetry, onTool }) {
+      const isReviewer = agentId !== "research" && agentId !== (process.env.RESEARCH_AGENT_ID || "research");
+      const roleConfig = isReviewer ? runtimeConfig.reviewers : runtimeConfig.orchestrator;
+      const system = await loadAgentPrompt(root, agentId);
+      const session = sessions.get(sessionKey) || { agentId, history: [] };
+      sessions.set(sessionKey, session);
+      const controller = new AbortController();
+      controllers.set(sessionKey, controller);
+
+      const conversation = isReviewer
+        ? [{ role: "user", content: message }]
+        : [...session.history, { role: "user", content: message }];
+
+      const startedAt = Date.now();
+      let totalIn = 0;
+      let totalOut = 0;
+      let hasUsage = false;
+      let finalText = "";
+
+      try {
+        const maxSteps = isReviewer ? 1 : 8;
+        for (let step = 0; step < maxSteps; step += 1) {
+          const response = await withExponentialBackoff(
+            () => invokeModelProvider({
+              roleConfig,
+              runtimeConfig,
+              system,
+              messages: conversation,
+              tools: isReviewer ? [] : STANDALONE_TOOLS,
+              onDelta,
+              signal: controller.signal,
+              fetch: options.fetch,
+            }),
+            { maxRetries: 3, baseDelayMs: 1000, onRetry, signal: controller.signal },
+          );
+          if (response.usage) {
+            hasUsage = true;
+            totalIn += Number(response.usage.inputTokens || 0);
+            totalOut += Number(response.usage.outputTokens || 0);
+          }
+          if (response.text) finalText = response.text;
+          if (isReviewer || !response.toolCalls?.length) {
+            conversation.push({
+              role: "assistant",
+              content: response.text || "",
+              ...(response.rawParts?.length ? { rawParts: response.rawParts } : {}),
+            });
+            break;
+          }
+          conversation.push({
+            role: "assistant",
+            content: response.text || "",
+            toolCalls: response.toolCalls,
+            ...(response.rawParts?.length ? { rawParts: response.rawParts } : {}),
+          });
+          for (const call of response.toolCalls) {
+            onTool?.(call.name);
+            let toolOutput;
+            try {
+              toolOutput = await executeStandaloneTool(root, projectId, call);
+            } catch (error) {
+              toolOutput = JSON.stringify({ error: String(error?.message || error) });
+            }
+            conversation.push({ role: "tool", toolCallId: call.id, toolName: call.name, content: toolOutput });
+          }
+        }
+        if (!isReviewer) session.history = conversation.slice(-24);
+        return {
+          runId: idempotencyKey || randomUUID(),
+          text: finalText,
+          usage: hasUsage ? { inputTokens: totalIn, outputTokens: totalOut } : undefined,
+          durationMs: Date.now() - startedAt,
+        };
+      } finally {
+        controllers.delete(sessionKey);
+      }
     },
     async abortSession(sessionKey) {
-      const gateway = await getGateway();
-      await gateway.request("chat.abort", { sessionKey });
+      controllers.get(sessionKey)?.abort();
+      controllers.delete(sessionKey);
     },
     async preflight() {
-      const result = await openClawPreflight();
-      const modelOk = result.cerebrasModel !== "not advertised" && result.cerebrasModel !== "configured but unavailable";
+      const [orch, rev] = await Promise.all([
+        checkProviderHealth(runtimeConfig.orchestrator, runtimeConfig, options),
+        checkProviderHealth(runtimeConfig.reviewers, runtimeConfig, options),
+      ]);
       const checks = [
-        { id: "gateway", label: "OpenClaw Gateway", ok: result.gateway === "connected", detail: `Connected · protocol ${result.protocol}` },
-        { id: "model", label: "Default model", ok: modelOk, detail: result.cerebrasModel },
-        { id: "research", label: "Research Orchestrator", ok: result.researchAgent === "configured", detail: result.researchAgent },
-        ...(result.reviewers || []).map((reviewer) => ({
-          id: reviewer.id,
-          label: reviewer.id === "research-auditor" ? "Evidence Auditor" : reviewer.id === "research-critic" ? "Methodology Critic" : "Feasibility Reviewer",
-          ok: reviewer.status === "configured",
-          detail: reviewer.status,
-        })),
+        { id: "harness", label: "Execution runtime", ok: true, detail: "Direct Standalone Runtime (zero external daemon required)" },
+        { id: "orchestrator", label: "Research Orchestrator model", ok: orch.ok, detail: orch.detail },
+        { id: "reviewers", label: "Independent Review Panel model", ok: rev.ok, detail: rev.detail },
       ];
       return {
-        ok: Boolean(result.ok) && checks.every((check) => check.ok),
-        harness: "openclaw",
+        ok: checks.every((c) => c.ok),
+        harness: "standalone",
         config: getPublicRuntimeConfig(runtimeConfig),
         checks,
-        note: "Non-generative preflight only. No research session was created.",
+        note: "Non-generative check: no research session or model request was created.",
       };
     },
   };
 }
 
-export async function runPreflight(root = process.cwd()) {
+export async function runPreflight(root = process.cwd(), options = {}) {
   const config = await readRuntimeConfig(root);
-  const adapter = createHarnessAdapter(config, root);
+  const adapter = createHarnessAdapter(config, root, options);
   return adapter.preflight();
 }

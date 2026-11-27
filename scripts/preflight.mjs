@@ -1,5 +1,4 @@
 import "./load-env.mjs";
-import { closeGateway } from "../src/gateway.mjs";
 import { runPreflight } from "../src/harnesses/harness-adapter.mjs";
 
 try {
@@ -13,6 +12,4 @@ try {
     note: "No research session or generation was created.",
   }, null, 2));
   process.exitCode = 1;
-} finally {
-  await closeGateway();
 }

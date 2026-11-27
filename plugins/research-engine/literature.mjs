@@ -96,6 +96,49 @@ function parseArxivAtom(xml) {
   return entries;
 }
 
+const openAlexWorkFields = "id,doi,title,display_name,publication_year,publication_date,authorships,primary_location,open_access,cited_by_count,is_retracted,referenced_works,cited_by_api_url,abstract_inverted_index";
+
+function makeCiteKey(title, authors, year) {
+  const firstAuthor = Array.isArray(authors) && authors[0] ? String(authors[0]) : "ref";
+  const surname = firstAuthor.split(/[\s,]+/).filter(Boolean).pop()?.toLowerCase().replace(/[^a-z0-9]/g, "") || "ref";
+  const kw = String(title || "study").toLowerCase().split(/[^a-z0-9]+/).find((w) => w.length >= 4 && !["with", "from", "that", "this"].includes(w)) || "paper";
+  return `${surname}${year || "nd"}${kw}`.slice(0, 32);
+}
+
+function normalizeOpenAlexWork(work, mailto = "") {
+  const abstract = abstractFromInvertedIndex(work.abstract_inverted_index);
+  const oaId = clean(work.id).split("/").pop();
+  const title = clean(work.title || work.display_name);
+  const authors = (work.authorships || []).map((item) => clean(item.author?.display_name)).filter(Boolean);
+  const year = work.publication_year || null;
+  const citedByRaw = clean(work.cited_by_api_url);
+  const citedByApiUrl = citedByRaw && mailto && !citedByRaw.includes("mailto=")
+    ? `${citedByRaw}${citedByRaw.includes("?") ? "&" : "?"}mailto=${encodeURIComponent(mailto)}`
+    : citedByRaw || undefined;
+  return {
+    id: `openalex:${oaId}`,
+    provider: "OpenAlex",
+    providerIds: { OpenAlex: oaId },
+    title,
+    year,
+    publishedDate: work.publication_date || undefined,
+    authors,
+    doi: normalizeDoi(work.doi),
+    venue: clean(work.primary_location?.source?.display_name),
+    url: clean(work.doi || work.id),
+    openAccessUrl: clean(work.open_access?.oa_url) || undefined,
+    abstract,
+    citationCount: Number(work.cited_by_count) || 0,
+    isRetracted: Boolean(work.is_retracted),
+    referencedWorkIds: Array.isArray(work.referenced_works)
+      ? work.referenced_works.slice(0, 25).map((idUrl) => clean(idUrl).split("/").pop()).filter(Boolean)
+      : [],
+    citedByApiUrl,
+    citeKey: makeCiteKey(title, authors, year),
+    readingStatus: "to-read",
+  };
+}
+
 export async function searchLiterature(query, options = {}) {
   const fetcher = options.fetch || globalThis.fetch;
   const limit = Math.min(Math.max(Number(options.limit) || 8, 1), 20);
@@ -104,7 +147,7 @@ export async function searchLiterature(query, options = {}) {
   const mailto = clean(process.env.OPENALEX_MAILTO);
   const semanticKey = clean(process.env.SEMANTIC_SCHOLAR_API_KEY);
 
-  const openAlexUrl = `https://api.openalex.org/works?search=${encodeURIComponent(query)}&per-page=${limit}&select=id,doi,title,display_name,publication_year,publication_date,authorships,primary_location,open_access,cited_by_count,abstract_inverted_index${mailto ? `&mailto=${encodeURIComponent(mailto)}` : ""}`;
+  const openAlexUrl = `https://api.openalex.org/works?search=${encodeURIComponent(query)}&per-page=${limit}&select=${openAlexWorkFields}${mailto ? `&mailto=${encodeURIComponent(mailto)}` : ""}`;
   const semanticUrl = `https://api.semanticscholar.org/graph/v1/paper/search?query=${encodeURIComponent(query)}&limit=${limit}&fields=paperId,title,abstract,year,authors,venue,externalIds,url,citationCount,openAccessPdf`;
   const arxivUrl = `https://export.arxiv.org/api/query?search_query=all:${encodeURIComponent(query)}&start=0&max_results=${Math.min(limit, 8)}&sortBy=relevance&sortOrder=descending`;
 
@@ -125,23 +168,7 @@ export async function searchLiterature(query, options = {}) {
 
   if (openAlex.status === "fulfilled") {
     for (const work of openAlex.value.results || []) {
-      const abstract = abstractFromInvertedIndex(work.abstract_inverted_index);
-      const oaId = clean(work.id).split("/").pop();
-      papers.push({
-        id: `openalex:${oaId}`,
-        provider: "OpenAlex",
-        providerIds: { OpenAlex: oaId },
-        title: clean(work.title || work.display_name),
-        year: work.publication_year || null,
-        publishedDate: work.publication_date || undefined,
-        authors: (work.authorships || []).map((item) => clean(item.author?.display_name)).filter(Boolean),
-        doi: normalizeDoi(work.doi),
-        venue: clean(work.primary_location?.source?.display_name),
-        url: clean(work.doi || work.id),
-        openAccessUrl: clean(work.open_access?.oa_url) || undefined,
-        abstract,
-        citationCount: Number(work.cited_by_count) || 0,
-      });
+      papers.push(normalizeOpenAlexWork(work, mailto));
     }
     sources.push({ id: "openalex", provider: "OpenAlex", url: openAlexUrl, status: "ok", queriedAt: startedAt });
   } else {
@@ -214,13 +241,21 @@ export async function searchLiterature(query, options = {}) {
       const previous = merged[keys.get(key)];
       if (!previous.abstract && paper.abstract) previous.abstract = paper.abstract;
       if (!previous.openAccessUrl && paper.openAccessUrl) previous.openAccessUrl = paper.openAccessUrl;
+      if (paper.isRetracted) previous.isRetracted = true;
+      if (!previous.referencedWorkIds?.length && paper.referencedWorkIds?.length) previous.referencedWorkIds = paper.referencedWorkIds;
+      if (!previous.citedByApiUrl && paper.citedByApiUrl) previous.citedByApiUrl = paper.citedByApiUrl;
+      if (!previous.citeKey) previous.citeKey = paper.citeKey || makeCiteKey(previous.title, previous.authors, previous.year);
       previous.providers = [...new Set([previous.provider, ...(previous.providers || []), paper.provider])];
       previous.providerIds = { ...(previous.providerIds || {}), ...(paper.providerIds || {}) };
       if (!previous.url && paper.url) previous.url = paper.url;
       if ((paper.citationCount || 0) > (previous.citationCount || 0)) previous.citationCount = paper.citationCount;
     } else {
       keys.set(key, merged.length);
-      merged.push({ ...paper, providers: [paper.provider] });
+      merged.push({
+        ...paper,
+        providers: [paper.provider],
+        citeKey: paper.citeKey || makeCiteKey(paper.title, paper.authors, paper.year),
+      });
     }
   }
   return { query, papers: merged.slice(0, limit), sources, retrievedAt: startedAt };
@@ -231,24 +266,13 @@ export async function lookupPaperByDoi(doiInput, options = {}) {
   const doi = normalizeDoi(doiInput);
   if (!doi) throw new Error("DOI must not be empty");
   const mailto = clean(process.env.OPENALEX_MAILTO);
-  const url = `https://api.openalex.org/works/doi:${encodeURIComponent(doi)}?select=id,doi,title,display_name,publication_year,publication_date,authorships,primary_location,open_access,cited_by_count,abstract_inverted_index${mailto ? `&mailto=${encodeURIComponent(mailto)}` : ""}`;
+  const url = `https://api.openalex.org/works/doi:${encodeURIComponent(doi)}?select=${openAlexWorkFields}${mailto ? `&mailto=${encodeURIComponent(mailto)}` : ""}`;
   const work = await requestJson(url, fetcher, { retries: 1 });
-  const oaId = clean(work.id).split("/").pop();
+  const normalized = normalizeOpenAlexWork(work, mailto);
   const paper = {
-    id: `openalex:${oaId}`,
-    provider: "OpenAlex",
+    ...normalized,
     providers: ["OpenAlex"],
-    providerIds: { OpenAlex: oaId },
-    title: clean(work.title || work.display_name),
-    year: work.publication_year || null,
-    publishedDate: work.publication_date || undefined,
-    authors: (work.authorships || []).map((item) => clean(item.author?.display_name)).filter(Boolean),
-    doi: normalizeDoi(work.doi) || doi,
-    venue: clean(work.primary_location?.source?.display_name),
-    url: clean(work.doi || work.id),
-    openAccessUrl: clean(work.open_access?.oa_url) || undefined,
-    abstract: abstractFromInvertedIndex(work.abstract_inverted_index),
-    citationCount: Number(work.cited_by_count) || 0,
+    doi: normalized.doi || doi,
   };
   return {
     paper,
@@ -261,6 +285,88 @@ export async function lookupPaperByDoi(doiInput, options = {}) {
     },
     source: { id: `openalex:doi:${doi.toLowerCase()}`, provider: "OpenAlex", url, status: "ok", queriedAt: new Date().toISOString() },
   };
+}
+
+export async function snowballCitations(paperNode, options = {}) {
+  const fetcher = options.fetch || globalThis.fetch;
+  const direction = ["references", "citations", "both"].includes(options.direction) ? options.direction : "both";
+  const limit = Math.min(Math.max(Number(options.limit) || 6, 1), 12);
+  const mailto = clean(process.env.OPENALEX_MAILTO);
+  const startedAt = new Date().toISOString();
+  const data = paperNode?.data || {};
+
+  let oaId = data.providerIds?.OpenAlex || (String(paperNode?.id || "").startsWith("openalex:") ? String(paperNode.id).slice("openalex:".length) : "");
+  let refIds = Array.isArray(data.referencedWorkIds) ? data.referencedWorkIds : [];
+  let citedByUrl = data.citedByApiUrl || "";
+
+  if ((!oaId || (!refIds.length && !citedByUrl)) && data.doi) {
+    try {
+      const resolved = await lookupPaperByDoi(data.doi, { fetch: fetcher });
+      oaId = resolved.paper.providerIds?.OpenAlex || oaId;
+      if (!refIds.length) refIds = resolved.paper.referencedWorkIds || [];
+      if (!citedByUrl) citedByUrl = resolved.paper.citedByApiUrl || "";
+    } catch { /* fall back gracefully if DOI resolution fails */ }
+  }
+
+  const jobs = [];
+  if ((direction === "references" || direction === "both") && refIds.length) {
+    const batch = refIds.slice(0, limit).join("|");
+    const url = `https://api.openalex.org/works?filter=openalex:${encodeURIComponent(batch)}&per-page=${limit}&select=${openAlexWorkFields}${mailto ? `&mailto=${encodeURIComponent(mailto)}` : ""}`;
+    jobs.push({ kind: "reference", url });
+  }
+  if ((direction === "citations" || direction === "both") && (citedByUrl || oaId)) {
+    const url = citedByUrl
+      ? `${citedByUrl}${citedByUrl.includes("per-page") ? "" : `&per-page=${limit}`}&select=${openAlexWorkFields}`
+      : `https://api.openalex.org/works?filter=cites:${encodeURIComponent(oaId)}&sort=cited_by_count:desc&per-page=${limit}&select=${openAlexWorkFields}${mailto ? `&mailto=${encodeURIComponent(mailto)}` : ""}`;
+    jobs.push({ kind: "citation", url });
+  }
+
+  if (!jobs.length) {
+    throw new Error("No OpenAlex identifier, DOI, or citation links are attached to this paper yet.");
+  }
+
+  const settled = await Promise.allSettled(jobs.map((job) => requestJson(job.url, fetcher, { retries: 1 })));
+  const nodes = [];
+  const edges = [];
+  const sources = [];
+  const seen = new Set([paperNode.id]);
+
+  settled.forEach((outcome, idx) => {
+    const job = jobs[idx];
+    if (outcome.status === "fulfilled") {
+      sources.push({ id: `openalex:snowball:${job.kind}:${paperNode.id}`, provider: "OpenAlex", url: job.url, status: "ok", queriedAt: startedAt });
+      for (const work of outcome.value?.results || []) {
+        const p = normalizeOpenAlexWork(work, mailto);
+        if (!p.title || seen.has(p.id)) continue;
+        seen.add(p.id);
+        nodes.push({
+          id: p.id,
+          type: "paper",
+          title: p.title,
+          sourceRefs: ["OpenAlex Snowball"],
+          data: { ...p, providers: ["OpenAlex"] },
+        });
+        edges.push({
+          id: `edge:snowball:${paperNode.id}:${p.id}`,
+          source: job.kind === "reference" ? paperNode.id : p.id,
+          target: job.kind === "reference" ? p.id : paperNode.id,
+          type: "supports",
+          label: job.kind === "reference" ? "Cites prior work" : "Cites this study",
+        });
+      }
+    } else {
+      sources.push({
+        id: `openalex:snowball:${job.kind}:${paperNode.id}`,
+        provider: "OpenAlex",
+        url: job.url,
+        status: "error",
+        queriedAt: startedAt,
+        error: String(outcome.reason?.message || outcome.reason).slice(0, 200),
+      });
+    }
+  });
+
+  return { nodes, edges, sources };
 }
 
 const RECENT_TOPICS = {

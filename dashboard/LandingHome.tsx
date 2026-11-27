@@ -7,12 +7,14 @@ import {
   ArrowRight,
   ArrowUpRight,
   BookOpen,
+  FilePlus2,
   FlaskConical,
   FolderOpen,
   LoaderCircle,
   Search,
   ShieldCheck,
   Trash2,
+  Upload,
 } from "lucide-react";
 import type { InvestigationMode, RecentPaperCard, ResearchProjectSummary } from "../packages/contracts";
 import { MonoMeta, SectionHeader, StatusBadge } from "./ui";
@@ -31,6 +33,9 @@ export function LandingHome({
   busy,
   error,
   onStart,
+  onLoadSample,
+  onCreateBlank,
+  onImportBundle,
   onSelectProject,
   onDeleteProject,
 }: {
@@ -38,6 +43,9 @@ export function LandingHome({
   busy: boolean;
   error?: string;
   onStart: (curiosity: string, mode: InvestigationMode) => void;
+  onLoadSample: () => void;
+  onCreateBlank: () => void;
+  onImportBundle: (file: File) => void;
   onSelectProject: (projectId: string) => void;
   onDeleteProject: (projectId: string) => void;
 }) {
@@ -182,6 +190,41 @@ export function LandingHome({
                 <span>{error}</span>
               </div>
             ) : null}
+
+            <div style={{ display: "flex", justifyContent: "center", alignItems: "center", gap: 10, flexWrap: "wrap" }}>
+              <button
+                type="button"
+                className="ori-btn ori-btn--secondary ori-btn--sm"
+                onClick={onLoadSample}
+                disabled={busy}
+              >
+                <FlaskConical size={14} aria-hidden="true" />
+                <span>Explore Sample Investigation (No API key needed)</span>
+              </button>
+              <button
+                type="button"
+                className="ori-btn ori-btn--ghost ori-btn--sm"
+                onClick={onCreateBlank}
+                disabled={busy}
+              >
+                <FilePlus2 size={14} aria-hidden="true" />
+                <span>New Blank Workspace</span>
+              </button>
+              <label className="ori-btn ori-btn--ghost ori-btn--sm" style={{ cursor: "pointer" }}>
+                <Upload size={14} aria-hidden="true" />
+                <span>Import Research Bundle (.zip / .json)</span>
+                <input
+                  type="file"
+                  accept=".zip,.json,application/zip,application/json"
+                  hidden
+                  onChange={(e) => {
+                    const f = e.target.files?.[0];
+                    if (f) onImportBundle(f);
+                    e.target.value = "";
+                  }}
+                />
+              </label>
+            </div>
           </form>
         </div>
 

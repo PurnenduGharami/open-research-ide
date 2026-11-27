@@ -409,7 +409,7 @@ async function runAutonomousArc(investigation, curiosity) {
       sessionKey: investigation.sessionKey,
       kind: "literature-analysis",
       commandId: `${investigation.runId}:elephant-literature`,
-      message: `FIRST TURN — literature and hypothesis only. Curiosity: ${curiosity}\nFollow your first-turn workflow: retrieve at most 6 real papers with concise scientific keywords, preserve source failures, read fresh canonical state, and commit exact evidence, genuine contradictions if any, gaps, and one testable hypothesis. Do not create reviews, experiments, labs, results, or ready status. Write a sharp, readable synthesis explaining what the literature actually shows and where the real gap sits.`,
+      message: `FIRST TURN — literature and hypothesis only. Curiosity: ${curiosity}\nFollow your first-turn workflow: retrieve at most 6 real papers with concise scientific keywords, preserve source failures, read fresh canonical state, and commit exact evidence, genuine contradictions (with contradicts edges and data.sides comparing both papers/quotes and definitions) if any, gaps, and one testable hypothesis. Do not create reviews, experiments, labs, results, or ready status. Write a sharp, readable synthesis explaining what the literature actually shows and where the real gap sits.`,
     });
     if (firstTurn.text) {
       await commit(investigation, "append_message", {
@@ -560,7 +560,7 @@ export async function startInvestigation(curiosity, options = {}) {
   const completion = mode === "guided"
     ? runGuidedTurn(
         investigation,
-        `GUIDED RESEARCH TURN — Curiosity: ${cleanCuriosity}\nRead the project, search real peer-reviewed literature (up to 6 papers), preserve any source failures, and commit exact unverified evidence quotes, genuine contradictions, research gaps, and a clear initial testable hypothesis when supported. Write a sharp, readable explanation grounded in the papers (never bloated jargon), highlighting why the current approach works or falls short and suggesting 2 concrete directions the researcher can explore next. Do not run reviews or fabricate experiments yet.`,
+        `GUIDED RESEARCH TURN — Curiosity: ${cleanCuriosity}\nRead the project, search real peer-reviewed literature (up to 6 papers), preserve any source failures, and commit exact unverified evidence quotes, genuine contradictions (with contradicts edges and data.sides comparing both papers/quotes and definitions), research gaps, and a clear initial testable hypothesis when supported. Write a sharp, readable explanation grounded in the papers (never bloated jargon), highlighting why the current approach works or falls short and suggesting 2 concrete directions the researcher can explore next. Do not run reviews or fabricate experiments yet.`,
         "Exploring peer-reviewed literature",
       )
     : runAutonomousArc(investigation, cleanCuriosity);
@@ -595,7 +595,7 @@ export async function continueInvestigation(projectId, userMessage, options = {}
     await commit(investigation, "initialize", { sessionKey }, `${runId}:rebind-session`);
   }
 
-  const prompt = `FOLLOW-UP RESEARCH TURN — The researcher says:\n${userMessage.trim()}\n\nCall research_project_read first. If the researcher is asking a new angle or pushing back, run research_literature_search with focused scientific keywords (which appends a new literature block without overwriting prior blocks). Commit any new exact evidence quotes, updated contradictions/gaps, refined hypothesis, or experiment/lab plans via research_project_commit. Reply concisely and clearly, citing the real retrieved papers.`;
+  const prompt = `FOLLOW-UP RESEARCH TURN — The researcher says:\n${userMessage.trim()}\n\nCall research_project_read first. If the researcher is asking a new angle or pushing back, run research_literature_search with focused scientific keywords (which appends a new literature block without overwriting prior blocks). Commit any new exact evidence quotes, updated contradictions (with data.sides comparing both studies/quotes)/gaps, refined hypothesis, or experiment/lab plans via research_project_commit. Reply concisely and clearly, citing the real retrieved papers.`;
   const completion = runGuidedTurn(investigation, prompt, "Continuing literature & analysis");
   completion.catch(() => {});
   return { projectId: current.projectId, sessionKey: investigation.sessionKey, runId, completion };

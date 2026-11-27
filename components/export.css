@@ -1,16 +1,16 @@
 .exp-shell {
-  --exp-canvas: #fcfcfb;
-  --exp-surface: #ffffff;
-  --exp-subtle: #f5f5f3;
-  --exp-ink: #111315;
-  --exp-secondary-ink: #525760;
-  --exp-tertiary: #787e88;
-  --exp-hairline: #e6e6e2;
-  --exp-accent: #1e4fc2;
-  --exp-accent-hover: #173f9e;
-  --exp-accent-soft: rgba(30, 79, 194, 0.06);
-  --exp-danger: #b91c1c;
-  --exp-warning: #92400e;
+  --exp-canvas: var(--bg-canvas);
+  --exp-surface: var(--bg-surface);
+  --exp-subtle: var(--bg-subtle);
+  --exp-ink: var(--text-primary);
+  --exp-secondary-ink: var(--text-secondary);
+  --exp-tertiary: var(--text-muted);
+  --exp-hairline: var(--border-subtle);
+  --exp-accent: var(--accent);
+  --exp-accent-hover: var(--accent-hover);
+  --exp-accent-soft: var(--accent-tint);
+  --exp-danger: var(--status-danger);
+  --exp-warning: var(--status-warn);
   container: exp / inline-size;
   min-width: 0;
   color: var(--exp-ink);
@@ -73,8 +73,8 @@
   background: var(--exp-subtle);
   font-size: 13px;
 }
-.exp-error { border-color: rgba(185, 28, 28, 0.25); color: var(--exp-danger); background: #fef2f2; }
-.exp-fresh-note { border-color: rgba(30, 79, 194, 0.28); color: var(--exp-accent); background: var(--exp-accent-soft); }
+.exp-error { border-color: var(--status-danger-border); color: var(--exp-danger); background: var(--status-danger-bg); }
+.exp-fresh-note { border-color: var(--accent-border); color: var(--exp-accent); background: var(--exp-accent-soft); }
 
 .exp-formats {
   display: grid;

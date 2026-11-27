@@ -14,6 +14,7 @@ import type {
   SetupStatus,
   StreamEvent,
   ViewId,
+  WorkspaceFileEntry,
 } from "../packages/contracts";
 
 const idleTelemetry: RunTelemetry = { status: "idle", outputTpsLabel: "run-average output TPS" };
@@ -34,9 +35,11 @@ export default function AppClient({
 }) {
   const [project, setProject] = useState<ResearchProject | null>(initialProject);
   const [projects, setProjects] = useState<ResearchProjectSummary[]>(initialProjects);
+  const [files, setFiles] = useState<WorkspaceFileEntry[]>([]);
   const [showHome, setShowHome] = useState<boolean>(!initialProject);
   const [activeView, setActiveView] = useState<ViewId>("research");
   const [selectedNodeId, setSelectedNodeId] = useState<string>();
+  const [highlightedQuote, setHighlightedQuote] = useState<string>();
   const [telemetry, setTelemetry] = useState<RunTelemetry>(idleTelemetry);
   const [streamingDelta, setStreamingDelta] = useState<string>("");
   const [busy, setBusy] = useState(false);
@@ -44,6 +47,20 @@ export default function AppClient({
   const [announcement, setAnnouncement] = useState("");
 
   const activeProjectId = project?.projectId;
+
+  const refreshFiles = useCallback(async (projectId?: string) => {
+    const targetId = projectId || activeProjectId;
+    if (!targetId) {
+      setFiles([]);
+      return;
+    }
+    try {
+      const payload = await api<{ files: WorkspaceFileEntry[] }>(`/api/files?projectId=${encodeURIComponent(targetId)}`);
+      setFiles(payload.files || []);
+    } catch {
+      /* ignore background file refresh errors */
+    }
+  }, [activeProjectId]);
 
   const refresh = useCallback(async (projectId?: string) => {
     const query = projectId ? `?projectId=${encodeURIComponent(projectId)}` : "";
@@ -56,7 +73,12 @@ export default function AppClient({
     setProjects(payload.projects || []);
     const matchingRun = payload.runs?.find((r) => !payload.project || r.projectId === payload.project.projectId);
     if (matchingRun) setTelemetry(matchingRun);
-  }, []);
+    if (payload.project?.projectId) void refreshFiles(payload.project.projectId);
+  }, [refreshFiles]);
+
+  useEffect(() => {
+    if (activeProjectId) void refreshFiles(activeProjectId);
+  }, [activeProjectId, refreshFiles]);
 
   useEffect(() => {
     const query = activeProjectId ? `?projectId=${encodeURIComponent(activeProjectId)}` : "";
@@ -116,6 +138,22 @@ export default function AppClient({
     finally { setBusy(false); }
   }, []);
 
+  const handleSelectNode = useCallback((nodeId: string) => {
+    const target = project?.nodes.find((n) => n.id === nodeId);
+    if (target?.type === "evidence" && typeof target.data.quote === "string") {
+      setHighlightedQuote(target.data.quote);
+    } else {
+      setHighlightedQuote(undefined);
+    }
+    setSelectedNodeId(nodeId);
+  }, [project?.nodes]);
+
+  const handleJumpToPassage = useCallback((paperId: string, quote?: string) => {
+    setSelectedNodeId(paperId);
+    setHighlightedQuote(quote);
+    setAnnouncement("Jumped to highlighted passage in source paper");
+  }, []);
+
   const onStart = (curiosity: string, mode: InvestigationMode) => runAction(async () => {
     setStreamingDelta("");
     const started = await api<{ projectId: string; sessionKey: string; runId: string }>("/api/investigation", {
@@ -124,8 +162,62 @@ export default function AppClient({
     });
     setShowHome(false);
     setActiveView("research");
-    setTelemetry({ status: "connecting", projectId: started.projectId, runId: started.runId, stage: "Connecting to research runtime", startedAt: new Date().toISOString(), outputTpsLabel: "run-average output TPS" });
+    setSelectedNodeId(undefined);
+    setHighlightedQuote(undefined);
+    setTelemetry({ status: "connecting", projectId: started.projectId, runId: started.runId, stage: "Connecting to Gemini runtime", startedAt: new Date().toISOString(), outputTpsLabel: "run-average output TPS" });
     await refresh(started.projectId);
+  });
+
+  const onLoadSample = () => runAction(async () => {
+    const res = await api<{ project: ResearchProject; projects: ResearchProjectSummary[] }>("/api/project", {
+      method: "POST",
+      body: JSON.stringify({ action: "load-sample" }),
+    });
+    setProject(res.project);
+    setProjects(res.projects);
+    setShowHome(false);
+    setActiveView("research");
+    setSelectedNodeId(undefined);
+    setHighlightedQuote(undefined);
+    setStreamingDelta("");
+    setTelemetry(idleTelemetry);
+    await refreshFiles(res.project.projectId);
+    setAnnouncement("Sample walkthrough loaded");
+  });
+
+  const onCreateBlank = () => runAction(async () => {
+    const res = await api<{ project: ResearchProject; projects: ResearchProjectSummary[] }>("/api/project", {
+      method: "POST",
+      body: JSON.stringify({ action: "create-blank" }),
+    });
+    setProject(res.project);
+    setProjects(res.projects);
+    setShowHome(false);
+    setActiveView("workspace");
+    setSelectedNodeId(undefined);
+    setHighlightedQuote(undefined);
+    setStreamingDelta("");
+    setTelemetry(idleTelemetry);
+    await refreshFiles(res.project.projectId);
+    setAnnouncement("Blank local-first workspace created");
+  });
+
+  const onImportBundle = (file: File) => runAction(async () => {
+    const form = new FormData();
+    form.set("file", file);
+    const response = await fetch("/api/project", { method: "POST", body: form });
+    const payload = await response.json();
+    if (!response.ok) throw new Error(payload.error || "Bundle import failed");
+    setProject(payload.project);
+    setProjects(payload.projects || []);
+    setShowHome(false);
+    setActiveView("research");
+    setSelectedNodeId(undefined);
+    setHighlightedQuote(undefined);
+    setStreamingDelta("");
+    setTelemetry(idleTelemetry);
+    await refreshFiles(payload.project.projectId);
+    setAnnouncement(`Imported bundle: ${payload.filesRestored} workspace files restored; ${payload.verification?.verified ?? 0}/${payload.verification?.total ?? 0} SHA-256 quotes verified`);
   });
 
   const onContinue = (message: string) => runAction(async () => {
@@ -174,8 +266,10 @@ export default function AppClient({
     setProjects(res.projects);
     setShowHome(false);
     setSelectedNodeId(undefined);
+    setHighlightedQuote(undefined);
     setStreamingDelta("");
     setTelemetry(idleTelemetry);
+    await refreshFiles(res.project.projectId);
   });
 
   const onDeleteProject = (projectId: string) => runAction(async () => {
@@ -186,6 +280,7 @@ export default function AppClient({
     setProject(res.project);
     setProjects(res.projects);
     if (!res.project) setShowHome(true);
+    else await refreshFiles(res.project.projectId);
   });
 
   const onEvidenceAction = (nodeId: string, action: "confirm" | "unconfirm" | "reject") => runAction(async () => {
@@ -197,14 +292,20 @@ export default function AppClient({
     setAnnouncement(`Evidence ${action}ed`);
   });
 
-  const onAddManualEvidence = (paperId: string, quote: string, title?: string) => runAction(async () => {
+  const onAddManualEvidence = (
+    paperId: string,
+    quote: string,
+    title?: string,
+    meta?: { sourceField?: "abstract" | "fullText"; page?: number },
+  ) => runAction(async () => {
     const payload = await api<{ project: ResearchProject; nodeId: string }>("/api/evidence/add", {
       method: "POST",
-      body: JSON.stringify({ projectId: project?.projectId, paperId, quote, title }),
+      body: JSON.stringify({ projectId: project?.projectId, paperId, quote, title, ...meta }),
     });
     setProject(payload.project);
     setSelectedNodeId(payload.nodeId);
-    setAnnouncement("Manual abstract evidence anchored and confirmed");
+    setHighlightedQuote(quote);
+    setAnnouncement("Passage evidence anchored and confirmed");
   });
 
   const onAddPaperByDoi = (doi: string) => runAction(async () => {
@@ -214,6 +315,76 @@ export default function AppClient({
     });
     setProject(payload.project);
     setAnnouncement("Paper added by DOI");
+  });
+
+  const onImportReferences = (body: Record<string, unknown>) => runAction(async () => {
+    const payload = await api<{ project: ResearchProject; importedCount: number }>("/api/papers/import", {
+      method: "POST",
+      body: JSON.stringify({ projectId: project?.projectId, ...body }),
+    });
+    setProject(payload.project);
+    setAnnouncement(`Imported ${payload.importedCount} bibliographic record(s)`);
+  });
+
+  const onSearchDirect = async (query: string) => {
+    const payload = await api<{ papers: Array<Record<string, unknown>> }>("/api/papers/search", {
+      method: "POST",
+      body: JSON.stringify({ action: "query", query }),
+    });
+    return payload.papers || [];
+  };
+
+  const onAddSearchedPapers = (papersToAdd: Array<Record<string, unknown>>) => runAction(async () => {
+    const payload = await api<{ project: ResearchProject; addedCount: number }>("/api/papers/search", {
+      method: "POST",
+      body: JSON.stringify({ action: "add", projectId: project?.projectId, papers: papersToAdd }),
+    });
+    setProject(payload.project);
+    setAnnouncement(`Added ${payload.addedCount} paper(s) to library`);
+  });
+
+  const onUploadPdf = (file: File, paperId?: string) => runAction(async () => {
+    if (!project) return;
+    const form = new FormData();
+    form.set("projectId", project.projectId);
+    if (paperId) form.set("paperId", paperId);
+    form.set("file", file);
+    const response = await fetch("/api/papers/pdf", { method: "POST", body: form });
+    const payload = await response.json();
+    if (!response.ok) throw new Error(payload.error || "PDF extraction failed");
+    setProject(payload.project);
+    await refreshFiles(project.projectId);
+    setAnnouncement(`Extracted ${payload.pageCount} pages from PDF`);
+  });
+
+  const onFetchOaPdf = (paperId: string) => runAction(async () => {
+    if (!project) return;
+    const payload = await api<{ project: ResearchProject; pageCount: number }>("/api/papers/pdf", {
+      method: "POST",
+      body: JSON.stringify({ projectId: project.projectId, action: "fetch-oa", paperId }),
+    });
+    setProject(payload.project);
+    await refreshFiles(project.projectId);
+    setAnnouncement(`Fetched Open Access PDF (${payload.pageCount} pages)`);
+  });
+
+  const onSnowballPaper = (paperId: string, direction: "references" | "citations" | "both") => runAction(async () => {
+    if (!project) return;
+    const payload = await api<{ project: ResearchProject; addedCount: number }>("/api/papers/snowball", {
+      method: "POST",
+      body: JSON.stringify({ projectId: project.projectId, paperId, direction }),
+    });
+    setProject(payload.project);
+    setAnnouncement(`Snowballed ${payload.addedCount} connected paper(s)`);
+  });
+
+  const onPlanningAction = (body: Record<string, unknown>) => runAction(async () => {
+    if (!project) return;
+    const payload = await api<{ project: ResearchProject }>("/api/planning", {
+      method: "POST",
+      body: JSON.stringify({ projectId: project.projectId, ...body }),
+    });
+    setProject(payload.project);
   });
 
   const onUpdateNode = (nodeId: string, patch: { title?: string; data?: Record<string, unknown> }) => runAction(async () => {
@@ -231,6 +402,7 @@ export default function AppClient({
     });
     setProject(payload.project);
     setSelectedNodeId(undefined);
+    setHighlightedQuote(undefined);
   });
 
   const onRunCode = (experimentId: string, code: string) => runAction(async () => {
@@ -292,10 +464,14 @@ export default function AppClient({
     setAnnouncement("Observed results imported; frozen expectations preserved");
   });
 
-  const onManuscriptAction = (action: "draft" | "audit" | "humanize" | "save", manuscript?: ManuscriptDocument) => runAction(async () => {
+  const onManuscriptAction = (
+    action: "draft" | "audit" | "humanize" | "save" | "ai-refine",
+    manuscript?: ManuscriptDocument,
+    extra?: { sectionId?: string },
+  ) => runAction(async () => {
     const res = await api<{ project: ResearchProject }>("/api/manuscript", {
       method: "POST",
-      body: JSON.stringify({ projectId: project?.projectId, action, manuscript }),
+      body: JSON.stringify({ projectId: project?.projectId, action, manuscript, ...extra }),
     });
     setProject(res.project);
   });
@@ -308,7 +484,7 @@ export default function AppClient({
     if (res.project) setProject(res.project);
     else await refresh(project?.projectId);
     setActiveView("published");
-    setAnnouncement("HTML, PDF, LaTeX, and ZIP archive generated");
+    setAnnouncement("HTML, PDF, LaTeX, and RO-Crate ZIP archive generated");
   });
 
   const preflight = useCallback(async (): Promise<SetupStatus> => {
@@ -331,6 +507,7 @@ export default function AppClient({
       <ResearchDashboard
         project={project}
         projects={projects}
+        files={files}
         showHome={showHome}
         telemetry={telemetry}
         streamingDelta={streamingDelta}
@@ -340,17 +517,34 @@ export default function AppClient({
         onSelectProject={onSelectProject}
         onDeleteProject={onDeleteProject}
         onStart={onStart}
+        onLoadSample={onLoadSample}
+        onCreateBlank={onCreateBlank}
+        onImportBundle={onImportBundle}
+        onRefreshFiles={refreshFiles}
+        onProjectSaved={async (updated) => {
+          setProject(updated);
+          await refreshFiles(updated.projectId);
+        }}
         onContinue={onContinue}
         onTriggerReviewPanel={onTriggerReviewPanel}
         onSynthesizeExperiment={onSynthesizeExperiment}
         onStop={onStop}
         onPreflight={preflight}
         onSaveConfig={saveConfig}
-        onSelectNode={setSelectedNodeId}
+        onSelectNode={handleSelectNode}
+        onJumpToPassage={handleJumpToPassage}
         selectedNodeId={selectedNodeId}
+        highlightedQuote={highlightedQuote}
         onEvidenceAction={onEvidenceAction}
         onAddManualEvidence={onAddManualEvidence}
         onAddPaperByDoi={onAddPaperByDoi}
+        onImportReferences={onImportReferences}
+        onSearchDirect={onSearchDirect}
+        onAddSearchedPapers={onAddSearchedPapers}
+        onUploadPdf={onUploadPdf}
+        onFetchOaPdf={onFetchOaPdf}
+        onSnowballPaper={onSnowballPaper}
+        onPlanningAction={onPlanningAction}
         onUpdateNode={onUpdateNode}
         onDeleteNode={onDeleteNode}
         onRunCode={onRunCode}
@@ -362,7 +556,7 @@ export default function AppClient({
         onExport={onExport}
         busy={busy}
         error={error}
-        graph={<KnowledgeGraph project={project} selectedNodeId={selectedNodeId} onSelectNode={setSelectedNodeId} />}
+        graph={<KnowledgeGraph project={project} selectedNodeId={selectedNodeId} onSelectNode={handleSelectNode} />}
         exportPanel={<ExportPanel project={project} onExport={onExport} busy={busy} error={error} />}
       />
       <div className="ori-visually-hidden" role="status" aria-live="polite">{announcement}</div>

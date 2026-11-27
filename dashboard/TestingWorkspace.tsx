@@ -2,6 +2,8 @@
 
 import { useState } from "react";
 import type { ChangeEvent, FormEvent } from "react";
+import { CodeEditor } from "../components";
+import type { EditorLanguage } from "../components";
 import {
   Beaker,
   CheckCircle2,
@@ -23,7 +25,9 @@ import type {
   PriceKind,
   ResearchNode,
   ResearchProject,
+  WorkspaceFileEntry,
 } from "../packages/contracts";
+import { StatsWorkbench } from "./StatsWorkbench";
 import { MonoMeta, SectionHeader, StatusBadge } from "./ui";
 
 function formatUtcDateTime(value?: string): string {
@@ -45,6 +49,8 @@ function safeExternalUrl(value?: string): string | undefined {
 
 export function TestingWorkspace({
   project,
+  files = [],
+  initialCsvPath,
   busy,
   onSelectNode,
   onSynthesizeExperiment,
@@ -53,8 +59,11 @@ export function TestingWorkspace({
   onDiscoverLabs,
   onUpdateLab,
   onImportResult,
+  onProjectSaved,
 }: {
   project: ResearchProject;
+  files?: WorkspaceFileEntry[];
+  initialCsvPath?: string;
   busy: boolean;
   onSelectNode: (id: string) => void;
   onSynthesizeExperiment: (modality: ExperimentModality) => void;
@@ -70,6 +79,7 @@ export function TestingWorkspace({
     datasetName?: string;
     sourceModality?: ExperimentModality;
   }) => void;
+  onProjectSaved?: (project: ResearchProject) => Promise<void>;
 }) {
   const experiments = project.nodes.filter((n) => n.type === "experiment");
   const labs = project.nodes.filter((n) => n.type === "lab");
@@ -171,6 +181,15 @@ export function TestingWorkspace({
           ))}
         </section>
       ) : null}
+
+      <StatsWorkbench
+        project={project}
+        files={files}
+        initialCsvPath={initialCsvPath}
+        onSaveFigureComplete={async (updatedProject) => {
+          if (onProjectSaved) await onProjectSaved(updatedProject);
+        }}
+      />
     </div>
   );
 }
@@ -295,7 +314,13 @@ function ExperimentCard({
               </button>
             </div>
           </div>
-          <textarea className="ori-code-editor" value={codeDraft} onChange={(e) => setCodeDraft(e.target.value)} aria-label="Experiment source code" />
+          <CodeEditor
+            language={(data.codeExperiment?.language === "javascript" ? "javascript" : "python") as EditorLanguage}
+            value={codeDraft}
+            minHeight={220}
+            ariaLabel="Experiment source code"
+            onChange={(next) => setCodeDraft(next)}
+          />
           {data.codeExperiment?.lastRunOutput ? (
             <div className="ori-terminal-out">
               {`Exit ${data.codeExperiment.lastRunOutput.exitCode} · ${data.codeExperiment.lastRunOutput.durationMs}ms · ${data.codeExperiment.lastRunOutput.ranAt}\n`}

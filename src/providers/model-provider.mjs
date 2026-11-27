@@ -4,8 +4,7 @@ const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 
 function stripProviderPrefix(provider, model) {
   const clean = String(model || "").trim();
-  const prefixes = [`${provider}/`, "openai/", "google/", "gemini/", "anthropic/", "ollama/"];
-  if (provider === "openrouter") return clean.replace(/^openrouter\//i, "");
+  const prefixes = [`${provider}/`, "google/", "gemini/", "vertex/", "gemma-local/", "ollama/", "custom/"];
   for (const prefix of prefixes) {
     if (clean.toLowerCase().startsWith(prefix)) return clean.slice(prefix.length);
   }
@@ -14,7 +13,7 @@ function stripProviderPrefix(provider, model) {
 
 export function isRateLimitError(error) {
   const text = String(error?.message || error || "");
-  return error?.status === 429 || error?.statusCode === 429 || /(?:\b429\b|rate.?limit|too many requests|queue_exceeded)/i.test(text);
+  return error?.status === 429 || error?.statusCode === 429 || /(?:\b429\b|rate.?limit|too many requests|resource_exhausted)/i.test(text);
 }
 
 export function parseRetryAfterMs(headersOrError) {
@@ -47,26 +46,195 @@ export async function withExponentialBackoff(fn, { maxRetries = 3, baseDelayMs =
   }
 }
 
-async function fetchJsonWithError(url, init, fetcher) {
-  const response = await fetcher(url, init);
-  const text = await response.text();
-  if (!response.ok) {
-    const error = new Error(`HTTP ${response.status}: ${text.slice(0, 300)}`);
-    error.status = response.status;
-    error.retryAfterMs = parseRetryAfterMs(response);
-    throw error;
-  }
-  return text ? JSON.parse(text) : {};
+async function ensureOk(response) {
+  if (response.ok) return response;
+  const text = await response.text().catch(() => "");
+  const error = new Error(`HTTP ${response.status}: ${text.slice(0, 300)}`);
+  error.status = response.status;
+  error.retryAfterMs = parseRetryAfterMs(response);
+  throw error;
 }
 
-async function callOpenAiCompatible({ provider, model, baseUrl, apiKey, system, messages, tools, onDelta, signal, fetcher }) {
-  const endpoint = `${(baseUrl || PROVIDER_DEFAULTS[provider]?.baseUrl || "https://api.openai.com/v1").replace(/\/$/, "")}/chat/completions`;
+export function sanitizeGeminiSchema(schema) {
+  if (!schema || typeof schema !== "object") return undefined;
+  const out = {};
+  if (typeof schema.type === "string") out.type = schema.type;
+  if (typeof schema.description === "string") out.description = schema.description;
+  if (Array.isArray(schema.enum)) out.enum = schema.enum;
+  if (schema.items && typeof schema.items === "object") {
+    const cleanItems = sanitizeGeminiSchema(schema.items);
+    if (cleanItems) out.items = cleanItems;
+  }
+  if (schema.properties && typeof schema.properties === "object") {
+    const entries = Object.entries(schema.properties)
+      .map(([k, v]) => [k, sanitizeGeminiSchema(v)])
+      .filter(([, v]) => Boolean(v));
+    if (entries.length) out.properties = Object.fromEntries(entries);
+    else if (out.type === "object") return undefined;
+  } else if (out.type === "object") {
+    return undefined;
+  }
+  if (Array.isArray(schema.required) && schema.required.length && out.properties) {
+    out.required = schema.required.filter((name) => name in out.properties);
+  }
+  return out;
+}
+
+function buildGeminiEndpoint({ provider, model, baseUrl, runtimeConfig, streaming = true }) {
+  const modelName = stripProviderPrefix(provider, model);
+  let rootUrl = (baseUrl || PROVIDER_DEFAULTS[provider]?.baseUrl || PROVIDER_DEFAULTS.gemini.baseUrl).replace(/\/$/, "");
+  if (provider === "vertex" && runtimeConfig?.vertexProject && rootUrl === PROVIDER_DEFAULTS.vertex.baseUrl) {
+    const loc = encodeURIComponent(runtimeConfig.vertexLocation || "us-central1");
+    const proj = encodeURIComponent(runtimeConfig.vertexProject);
+    rootUrl = `https://${runtimeConfig.vertexLocation || "us-central1"}-aiplatform.googleapis.com/v1/projects/${proj}/locations/${loc}/publishers/google`;
+  }
+  const action = streaming ? "streamGenerateContent?alt=sse" : "generateContent";
+  return `${rootUrl}/models/${encodeURIComponent(modelName)}:${action}`;
+}
+
+function formatGeminiContents(messages) {
+  const contents = [];
+  for (const msg of messages) {
+    if (msg.role === "tool") {
+      const responsePart = {
+        functionResponse: {
+          name: msg.toolName || "tool",
+          response: { output: msg.content },
+        },
+      };
+      const prev = contents[contents.length - 1];
+      if (prev && prev.role === "user" && prev.parts.every((part) => Boolean(part.functionResponse))) {
+        prev.parts.push(responsePart);
+      } else {
+        contents.push({ role: "user", parts: [responsePart] });
+      }
+      continue;
+    }
+
+    if (msg.role === "assistant") {
+      if (Array.isArray(msg.rawParts) && msg.rawParts.length) {
+        contents.push({ role: "model", parts: msg.rawParts });
+        continue;
+      }
+      const parts = [];
+      if (msg.content) parts.push({ text: msg.content });
+      for (const call of msg.toolCalls || []) {
+        parts.push({ functionCall: { name: call.name, args: call.arguments || {} } });
+      }
+      if (parts.length) contents.push({ role: "model", parts });
+      continue;
+    }
+
+    contents.push({ role: "user", parts: [{ text: String(msg.content || "") }] });
+  }
+  return contents;
+}
+
+function extractGeminiChunkParts(chunk, state) {
+  const parts = chunk?.candidates?.[0]?.content?.parts;
+  if (Array.isArray(parts)) {
+    for (const part of parts) {
+      state.rawParts.push(part);
+      if (typeof part.text === "string" && !part.thought && part.text) {
+        state.textChunks.push(part.text);
+        state.onDelta?.(part.text);
+      }
+      if (part.functionCall) {
+        state.toolCalls.push({
+          id: `gemini_call_${state.toolCalls.length}_${Date.now()}`,
+          name: part.functionCall.name,
+          arguments: part.functionCall.args || {},
+        });
+      }
+    }
+  }
+  if (chunk?.usageMetadata) {
+    state.usage = {
+      inputTokens: chunk.usageMetadata.promptTokenCount,
+      outputTokens: chunk.usageMetadata.candidatesTokenCount,
+    };
+  }
+}
+
+async function readGeminiSse(response, onDelta) {
+  const state = { rawParts: [], textChunks: [], toolCalls: [], usage: undefined, onDelta };
+  const reader = response.body.getReader();
+  const decoder = new TextDecoder();
+  let buffer = "";
+  while (true) {
+    const { done, value } = await reader.read();
+    if (done) break;
+    buffer += decoder.decode(value, { stream: true });
+    let newlineIndex;
+    while ((newlineIndex = buffer.indexOf("\n")) >= 0) {
+      const line = buffer.slice(0, newlineIndex).trim();
+      buffer = buffer.slice(newlineIndex + 1);
+      if (!line.startsWith("data:")) continue;
+      const dataStr = line.slice(5).trim();
+      if (!dataStr || dataStr === "[DONE]") continue;
+      try {
+        extractGeminiChunkParts(JSON.parse(dataStr), state);
+      } catch { /* Ignore partial/keepalive frames. */ }
+    }
+  }
+  if (buffer.trim().startsWith("data:")) {
+    const dataStr = buffer.trim().slice(5).trim();
+    if (dataStr && dataStr !== "[DONE]") {
+      try { extractGeminiChunkParts(JSON.parse(dataStr), state); } catch { /* Ignore trailing incomplete line. */ }
+    }
+  }
+  return { text: state.textChunks.join(""), toolCalls: state.toolCalls, rawParts: state.rawParts, usage: state.usage };
+}
+
+async function callGemini({ provider, model, baseUrl, apiKey, runtimeConfig, system, messages, tools, onDelta, signal, fetcher }) {
+  const endpoint = buildGeminiEndpoint({ provider, model, baseUrl, runtimeConfig, streaming: true });
+  const headers = { "Content-Type": "application/json" };
+  if (provider === "vertex" && apiKey.startsWith("ya29.")) {
+    headers.Authorization = `Bearer ${apiKey}`;
+  } else {
+    headers["x-goog-api-key"] = apiKey;
+  }
+
+  const functionDeclarations = (tools || []).map((tool) => {
+    const cleanParams = sanitizeGeminiSchema(tool.parameters);
+    return {
+      name: tool.name,
+      description: tool.description,
+      ...(cleanParams ? { parameters: cleanParams } : {}),
+    };
+  });
+
+  const body = {
+    contents: formatGeminiContents(messages),
+    ...(system ? { systemInstruction: { parts: [{ text: system }] } } : {}),
+    ...(functionDeclarations.length ? { tools: [{ functionDeclarations }] } : {}),
+  };
+
+  const response = await ensureOk(await fetcher(endpoint, {
+    method: "POST",
+    headers,
+    body: JSON.stringify(body),
+    signal,
+  }));
+
+  const contentType = String(response.headers?.get?.("content-type") || "").toLowerCase();
+  if (contentType.includes("text/event-stream") && response.body?.getReader) {
+    return readGeminiSse(response, onDelta);
+  }
+
+  const rawText = await response.text();
+  const payload = rawText ? JSON.parse(rawText) : {};
+  const chunks = Array.isArray(payload) ? payload : [payload];
+  const state = { rawParts: [], textChunks: [], toolCalls: [], usage: undefined, onDelta };
+  for (const chunk of chunks) extractGeminiChunkParts(chunk, state);
+  return { text: state.textChunks.join(""), toolCalls: state.toolCalls, rawParts: state.rawParts, usage: state.usage };
+}
+
+async function callCompatibleChat({ provider, model, baseUrl, apiKey, system, messages, tools, onDelta, signal, fetcher }) {
+  const endpoint = `${(baseUrl || PROVIDER_DEFAULTS[provider]?.baseUrl || "http://127.0.0.1:11434/v1").replace(/\/$/, "")}/chat/completions`;
   const headers = { "Content-Type": "application/json" };
   if (apiKey) headers.Authorization = `Bearer ${apiKey}`;
-  if (provider === "openrouter") {
-    headers["HTTP-Referer"] = "http://127.0.0.1:3000";
-    headers["X-Title"] = "Open Research IDE";
-  }
+
   const formattedMessages = [];
   if (system) formattedMessages.push({ role: "system", content: system });
   for (const msg of messages) {
@@ -86,6 +254,7 @@ async function callOpenAiCompatible({ provider, model, baseUrl, apiKey, system, 
       formattedMessages.push({ role: msg.role, content: msg.content });
     }
   }
+
   const body = {
     model: stripProviderPrefix(provider, model),
     messages: formattedMessages,
@@ -98,7 +267,10 @@ async function callOpenAiCompatible({ provider, model, baseUrl, apiKey, system, 
     }));
     body.tool_choice = "auto";
   }
-  const payload = await fetchJsonWithError(endpoint, { method: "POST", headers, body: JSON.stringify(body), signal }, fetcher);
+
+  const response = await ensureOk(await fetcher(endpoint, { method: "POST", headers, body: JSON.stringify(body), signal }));
+  const rawText = await response.text();
+  const payload = rawText ? JSON.parse(rawText) : {};
   const choice = payload.choices?.[0]?.message || {};
   const text = typeof choice.content === "string" ? choice.content : "";
   if (text && onDelta) onDelta(text);
@@ -116,144 +288,57 @@ async function callOpenAiCompatible({ provider, model, baseUrl, apiKey, system, 
   };
 }
 
-async function callAnthropic({ model, baseUrl, apiKey, system, messages, tools, onDelta, signal, fetcher }) {
-  const endpoint = `${(baseUrl || PROVIDER_DEFAULTS.anthropic.baseUrl).replace(/\/$/, "")}/messages`;
-  const formatted = [];
-  for (const msg of messages) {
-    if (msg.role === "tool") {
-      formatted.push({ role: "user", content: [{ type: "tool_result", tool_use_id: msg.toolCallId, content: msg.content }] });
-    } else if (msg.toolCalls?.length) {
-      const blocks = [];
-      if (msg.content) blocks.push({ type: "text", text: msg.content });
-      for (const call of msg.toolCalls) {
-        blocks.push({ type: "tool_use", id: call.id, name: call.name, input: call.arguments || {} });
-      }
-      formatted.push({ role: "assistant", content: blocks });
-    } else {
-      formatted.push({ role: msg.role, content: msg.content });
-    }
-  }
-  const body = {
-    model: stripProviderPrefix("anthropic", model),
-    max_tokens: 4096,
-    ...(system ? { system } : {}),
-    messages: formatted,
-    ...(tools?.length ? {
-      tools: tools.map((tool) => ({ name: tool.name, description: tool.description, input_schema: tool.parameters })),
-    } : {}),
-  };
-  const payload = await fetchJsonWithError(endpoint, {
-    method: "POST",
-    headers: {
-      "Content-Type": "application/json",
-      "x-api-key": apiKey,
-      "anthropic-version": "2023-06-01",
-    },
-    body: JSON.stringify(body),
-    signal,
-  }, fetcher);
-  const blocks = Array.isArray(payload.content) ? payload.content : [];
-  const text = blocks.filter((b) => b.type === "text").map((b) => b.text).join("\n");
-  if (text && onDelta) onDelta(text);
-  const toolCalls = blocks.filter((b) => b.type === "tool_use").map((b) => ({
-    id: b.id,
-    name: b.name,
-    arguments: b.input || {},
-  }));
-  return {
-    text,
-    toolCalls,
-    usage: payload.usage
-      ? { inputTokens: payload.usage.input_tokens, outputTokens: payload.usage.output_tokens }
-      : undefined,
-  };
-}
-
-async function callGemini({ model, baseUrl, apiKey, system, messages, tools, onDelta, signal, fetcher }) {
-  const modelName = stripProviderPrefix("gemini", model);
-  const endpoint = `${(baseUrl || PROVIDER_DEFAULTS.gemini.baseUrl).replace(/\/$/, "")}/models/${encodeURIComponent(modelName)}:generateContent?key=${encodeURIComponent(apiKey)}`;
-  const contents = [];
-  for (const msg of messages) {
-    if (msg.role === "tool") {
-      contents.push({
-        role: "user",
-        parts: [{ functionResponse: { name: msg.toolName || "tool", response: { content: msg.content } } }],
-      });
-    } else if (msg.toolCalls?.length) {
-      const parts = [];
-      if (msg.content) parts.push({ text: msg.content });
-      for (const call of msg.toolCalls) {
-        parts.push({ functionCall: { name: call.name, args: call.arguments || {} } });
-      }
-      contents.push({ role: "model", parts });
-    } else {
-      contents.push({ role: msg.role === "assistant" ? "model" : "user", parts: [{ text: msg.content }] });
-    }
-  }
-  const body = {
-    contents,
-    ...(system ? { systemInstruction: { parts: [{ text: system }] } } : {}),
-    ...(tools?.length ? {
-      tools: [{ functionDeclarations: tools.map((tool) => ({ name: tool.name, description: tool.description, parameters: tool.parameters })) }],
-    } : {}),
-  };
-  const payload = await fetchJsonWithError(endpoint, {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify(body),
-    signal,
-  }, fetcher);
-  const parts = payload.candidates?.[0]?.content?.parts || [];
-  const text = parts.filter((p) => typeof p.text === "string").map((p) => p.text).join("\n");
-  if (text && onDelta) onDelta(text);
-  const toolCalls = parts.filter((p) => p.functionCall).map((p, idx) => ({
-    id: `gemini_call_${idx}_${Date.now()}`,
-    name: p.functionCall.name,
-    arguments: p.functionCall.args || {},
-  }));
-  return {
-    text,
-    toolCalls,
-    usage: payload.usageMetadata
-      ? { inputTokens: payload.usageMetadata.promptTokenCount, outputTokens: payload.usageMetadata.candidatesTokenCount }
-      : undefined,
-  };
-}
-
 export async function invokeModelProvider({ roleConfig, runtimeConfig, system, messages, tools, onDelta, signal, fetch: customFetch }) {
   const fetcher = customFetch || globalThis.fetch;
-  const provider = roleConfig.provider || "cerebras";
+  const provider = roleConfig.provider || "gemini";
   const apiKey = resolveProviderApiKey(provider, runtimeConfig);
-  if (provider !== "ollama" && !apiKey) {
+  if (provider !== "gemma-local" && !apiKey) {
     throw new Error(`Missing API key for ${PROVIDER_DEFAULTS[provider]?.label || provider}. Configure it in the Setup modal or .env.`);
   }
   const startedAt = Date.now();
-  const args = { provider, model: roleConfig.model, baseUrl: roleConfig.baseUrl, apiKey, system, messages, tools, onDelta, signal, fetcher };
-  let result;
-  if (provider === "anthropic") result = await callAnthropic(args);
-  else if (provider === "gemini") result = await callGemini(args);
-  else result = await callOpenAiCompatible(args);
+  const args = { provider, model: roleConfig.model, baseUrl: roleConfig.baseUrl, apiKey, runtimeConfig, system, messages, tools, onDelta, signal, fetcher };
+  const result = (provider === "gemini" || provider === "vertex")
+    ? await callGemini(args)
+    : await callCompatibleChat(args);
   return { ...result, durationMs: Date.now() - startedAt };
 }
 
 export async function checkProviderHealth(roleConfig, runtimeConfig, options = {}) {
   const fetcher = options.fetch || globalThis.fetch;
-  const provider = roleConfig.provider || "cerebras";
+  const provider = roleConfig.provider || "gemini";
   const spec = PROVIDER_DEFAULTS[provider];
   const apiKey = resolveProviderApiKey(provider, runtimeConfig);
-  if (provider !== "ollama" && !apiKey) {
+  if (provider !== "gemma-local" && !apiKey) {
     return { ok: false, detail: `${spec?.label || provider} API key not configured (${spec?.envKey || "key missing"})` };
   }
-  if (provider === "ollama") {
+  if (provider === "gemini" && options.verifyRemote !== false && !process.env.NODE_TEST_CONTEXT) {
+    const modelName = stripProviderPrefix("gemini", roleConfig.model);
+    const rootUrl = (roleConfig.baseUrl || spec.baseUrl).replace(/\/$/, "");
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), 4000);
+    try {
+      const response = await fetcher(`${rootUrl}/models/${encodeURIComponent(modelName)}`, {
+        headers: { "x-goog-api-key": apiKey },
+        signal: controller.signal,
+      });
+      if (!response.ok) return { ok: false, detail: `Google Gemini check failed (HTTP ${response.status}) for ${modelName}` };
+      return { ok: true, detail: `Google Gemini ready · ${roleConfig.model}` };
+    } catch (error) {
+      return { ok: false, detail: `Google Gemini unreachable: ${error?.message || error}` };
+    } finally {
+      clearTimeout(timer);
+    }
+  }
+  if (provider === "gemma-local") {
     const base = (roleConfig.baseUrl || spec.baseUrl).replace(/\/v1\/?$/, "");
     const controller = new AbortController();
     const timer = setTimeout(() => controller.abort(), 4000);
     try {
       const response = await fetcher(`${base}/api/tags`, { signal: controller.signal });
-      if (!response.ok) return { ok: false, detail: `Ollama unreachable (HTTP ${response.status})` };
-      return { ok: true, detail: `Ollama reachable · ${roleConfig.model}` };
+      if (!response.ok) return { ok: false, detail: `Local Gemma (Ollama) unreachable (HTTP ${response.status})` };
+      return { ok: true, detail: `Local Gemma (Ollama) reachable · ${roleConfig.model}` };
     } catch (error) {
-      return { ok: false, detail: `Ollama unreachable at ${base}: ${error?.message || error}` };
+      return { ok: false, detail: `Local Gemma (Ollama) unreachable at ${base}: ${error?.message || error}` };
     } finally {
       clearTimeout(timer);
     }

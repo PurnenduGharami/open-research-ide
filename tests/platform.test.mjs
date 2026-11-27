@@ -11,10 +11,13 @@ import {
   recoverInterruptedProjects,
   setActiveProject,
 } from "../plugins/research-engine/engine.mjs";
+import { abstractSnippet, resolveContradictionSides, splitAbstractAroundQuote } from "../src/contradictions.ts";
 import { buildZipArchive } from "../src/export-renderer.mjs";
 import { draftManuscriptFromProject } from "../src/manuscript.mjs";
 import { auditManuscriptProse, humanizeProseText } from "../src/prose-linter.mjs";
 import { getPublicRuntimeConfig, readRuntimeConfig, saveRuntimeConfig } from "../src/runtime-config.mjs";
+import { seedSampleInvestigation } from "../src/sample-project.mjs";
+import { assertSameOriginHeaders } from "../src/origin-guard.mjs";
 import {
   buildColabNotebook,
   buildSurveyCsvTemplate,
@@ -101,6 +104,39 @@ test("evidence confirm/unconfirm/reject, lab quote updates, and non-staling cont
   assert.equal(project.exports[0].contentRevision, project.contentRevision);
 });
 
+test("contradiction resolution helpers, triage persistence, and sample investigation seeding", async (t) => {
+  const root = await mkdtemp(path.join(tmpdir(), "ori-sample-"));
+  t.after(() => rm(root, { recursive: true, force: true }));
+
+  const sample = await seedSampleInvestigation(root);
+  assert.equal(sample.status, "ready");
+  assert.equal(sample.nodes.filter((n) => n.type === "paper").length, 2);
+  assert.equal(sample.nodes.filter((n) => n.type === "review").length, 3);
+  assert.equal(sample.nodes.some((n) => n.type === "result"), true);
+  assert.ok(sample.manuscript);
+
+  const contradiction = sample.nodes.find((n) => n.type === "contradiction");
+  assert.ok(contradiction);
+  const sides = resolveContradictionSides(sample, contradiction);
+  assert.equal(sides.length, 2);
+  assert.ok(sides[0].paper && sides[0].quote && sides[0].abstract);
+  assert.ok(sides[1].paper && sides[1].quote && sides[1].abstract);
+
+  const split = splitAbstractAroundQuote(sides[0].abstract, sides[0].quote);
+  assert.ok(split);
+  assert.equal(split.match, sides[0].quote);
+  assert.ok(abstractSnippet(sides[1].abstract, sides[1].quote, 60));
+
+  const updated = await executeResearchCommand(root, {
+    projectId: sample.projectId,
+    commandId: "triage-1",
+    baseRevision: sample.revision,
+    op: "update_node",
+    payload: { nodeId: contradiction.id, data: { resolution: "different-conditions" } },
+  });
+  assert.equal(updated.nodes.find((n) => n.id === contradiction.id).data.resolution, "different-conditions");
+});
+
 test("validation tools build valid Colab notebooks, survey exports, CSV summaries, and execute local JS", async (t) => {
   const root = await mkdtemp(path.join(tmpdir(), "ori-validation-"));
   t.after(() => rm(root, { recursive: true, force: true }));
@@ -160,7 +196,7 @@ test("prose linter detects AI clichés and humanizer improves manuscript prose s
   assert.ok(draft.proseAudit.score >= 85);
 });
 
-test("deterministic ZIP archive builder and server-only runtime config masking", async (t) => {
+test("deterministic ZIP archive builder, Google runtime config masking, and proxy-aware same-origin checks", async (t) => {
   const root = await mkdtemp(path.join(tmpdir(), "ori-config-"));
   t.after(() => rm(root, { recursive: true, force: true }));
 
@@ -172,16 +208,36 @@ test("deterministic ZIP archive builder and server-only runtime config masking",
 
   await saveRuntimeConfig(root, {
     harness: "standalone",
-    orchestrator: { provider: "anthropic", model: "claude-sonnet-4-5" },
-    reviewers: { provider: "ollama", model: "qwen2.5:14b" },
-    secrets: { anthropic: "sk-ant-secret-fixture-value" },
+    orchestrator: { provider: "vertex", model: "gemini-2.5-pro" },
+    reviewers: { provider: "gemma-local", model: "gemma3:12b" },
+    vertexProject: "demo-research-gcp",
+    secrets: { vertex: "ya29-secret-fixture-value" },
   });
   const loaded = await readRuntimeConfig(root);
   assert.equal(loaded.harness, "standalone");
-  assert.equal(loaded.orchestrator.provider, "anthropic");
-  assert.equal(loaded.reviewers.provider, "ollama");
+  assert.equal(loaded.orchestrator.provider, "vertex");
+  assert.equal(loaded.reviewers.provider, "gemma-local");
+  assert.equal(loaded.vertexProject, "demo-research-gcp");
 
   const publicView = getPublicRuntimeConfig(loaded);
-  assert.equal(publicView.providersConfigured.anthropic, true);
-  assert.equal(JSON.stringify(publicView).includes("sk-ant-secret-fixture-value"), false);
+  assert.equal(publicView.providersConfigured.vertex, true);
+  assert.equal(JSON.stringify(publicView).includes("ya29-secret-fixture-value"), false);
+
+  // Proxy-aware same-origin check (Cloud Run / Firebase App Hosting)
+  assert.doesNotThrow(() => assertSameOriginHeaders({
+    origin: "https://open-research-ide.run.app",
+    host: "127.0.0.1:8080",
+    forwardedHost: "open-research-ide.run.app",
+    forwardedProto: "https",
+    nextUrlHost: "127.0.0.1:8080",
+    nextUrlProtocol: "http:",
+  }));
+
+  assert.throws(() => assertSameOriginHeaders({
+    origin: "https://evil.example",
+    host: "open-research-ide.run.app",
+    forwardedProto: "https",
+    nextUrlHost: "127.0.0.1:8080",
+    nextUrlProtocol: "http:",
+  }), /Cross-origin/);
 });

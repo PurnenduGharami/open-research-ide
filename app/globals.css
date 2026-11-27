@@ -1,50 +1,98 @@
 :root {
-  /* Open Research IDE — Unified Editorial & Precision Token System */
-  --bg-canvas: #fcfcfb;
+  /* Open Research IDE — Precision Light (Default) */
+  color-scheme: light;
+  --bg-app: #f6f7f9;
+  --bg-canvas: #ffffff;
   --bg-surface: #ffffff;
-  --bg-subtle: #f5f5f3;
-  --bg-hover: #efefec;
+  --bg-elevated: #ffffff;
+  --bg-subtle: #f3f4f6;
+  --bg-hover: rgba(17, 18, 20, 0.045);
+  --bg-active: rgba(37, 99, 235, 0.08);
+  --bg-topbar: rgba(255, 255, 255, 0.88);
+  --bg-code: #f8f9fb;
 
-  --text-primary: #111315;
-  --text-secondary: #525760;
-  --text-muted: #787e88;
+  --text-primary: #111214;
+  --text-secondary: #525660;
+  --text-muted: #848994;
 
-  /* Restrained Cobalt Blue Accent */
-  --accent: #1e4fc2;
-  --accent-hover: #173f9e;
-  --accent-tint: rgba(30, 79, 194, 0.06);
-  --accent-tint-strong: rgba(30, 79, 194, 0.11);
-  --accent-border: rgba(30, 79, 194, 0.36);
+  /* Precision Cobalt Accent */
+  --accent: #2563eb;
+  --accent-hover: #1d4ed8;
+  --accent-tint: rgba(37, 99, 235, 0.07);
+  --accent-tint-strong: rgba(37, 99, 235, 0.13);
+  --accent-border: rgba(37, 99, 235, 0.28);
 
   /* Semantic Status */
-  --status-ok: #166534;
-  --status-ok-bg: #f0fdf4;
-  --status-ok-border: rgba(22, 101, 52, 0.22);
-  --status-warn: #92400e;
-  --status-warn-bg: #fffbeb;
-  --status-warn-border: rgba(146, 64, 14, 0.24);
-  --status-danger: #b91c1c;
-  --status-danger-bg: #fef2f2;
-  --status-danger-border: rgba(185, 28, 28, 0.24);
+  --status-ok: #15803d;
+  --status-ok-bg: rgba(21, 128, 61, 0.08);
+  --status-ok-border: rgba(21, 128, 61, 0.22);
+  --status-warn: #b45309;
+  --status-warn-bg: rgba(180, 83, 9, 0.09);
+  --status-warn-border: rgba(180, 83, 9, 0.24);
+  --status-danger: #dc2626;
+  --status-danger-bg: rgba(220, 38, 38, 0.08);
+  --status-danger-border: rgba(220, 38, 38, 0.22);
 
-  /* Neutral Hairlines */
-  --border-subtle: #e6e6e2;
-  --border-strong: #d0d1cc;
+  /* Hairlines */
+  --border-subtle: rgba(17, 18, 20, 0.08);
+  --border-strong: rgba(17, 18, 20, 0.14);
 
   /* Typography */
   --font-display: var(--font-display-loaded), Georgia, "Times New Roman", serif;
   --font-sans: var(--font-sans-loaded), -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
   --font-mono: var(--font-mono-loaded), ui-monospace, "SFMono-Regular", Menlo, Consolas, monospace;
 
-  /* Radius (10–14px primary scale) */
-  --radius-sm: 8px;
-  --radius-md: 10px;
-  --radius-lg: 12px;
+  /* Radius Scale */
+  --radius-sm: 7px;
+  --radius-md: 9px;
+  --radius-lg: 11px;
   --radius-xl: 14px;
 
-  /* Minimal Shadows */
-  --shadow-subtle: 0 1px 2px rgba(17, 19, 21, 0.04);
-  --shadow-input: 0 2px 10px rgba(17, 19, 21, 0.04), 0 1px 2px rgba(17, 19, 21, 0.03);
+  /* Layered Elevation */
+  --shadow-subtle: 0 1px 2px rgba(17, 18, 20, 0.04);
+  --shadow-input: 0 2px 8px rgba(17, 18, 20, 0.04), 0 1px 2px rgba(17, 18, 20, 0.03);
+  --shadow-float: 0 10px 30px -10px rgba(17, 18, 20, 0.12), 0 2px 6px rgba(17, 18, 20, 0.04);
+}
+
+html[data-theme="dark"] {
+  /* Open Research IDE — Obsidian Dark */
+  color-scheme: dark;
+  --bg-app: #0c0d10;
+  --bg-canvas: #111318;
+  --bg-surface: #161920;
+  --bg-elevated: #1c2029;
+  --bg-subtle: #191c24;
+  --bg-hover: rgba(255, 255, 255, 0.055);
+  --bg-active: rgba(91, 141, 239, 0.15);
+  --bg-topbar: rgba(17, 19, 24, 0.88);
+  --bg-code: #0e1015;
+
+  --text-primary: #eef0f5;
+  --text-secondary: #9ea5b5;
+  --text-muted: #6c7385;
+
+  --accent: #5b8def;
+  --accent-hover: #7aa3f6;
+  --accent-tint: rgba(91, 141, 239, 0.12);
+  --accent-tint-strong: rgba(91, 141, 239, 0.22);
+  --accent-border: rgba(91, 141, 239, 0.36);
+
+  --status-ok: #4ade80;
+  --status-ok-bg: rgba(74, 222, 128, 0.12);
+  --status-ok-border: rgba(74, 222, 128, 0.26);
+  --status-warn: #fbbf24;
+  --status-warn-bg: rgba(251, 191, 36, 0.12);
+  --status-warn-border: rgba(251, 191, 36, 0.26);
+  --status-danger: #f87171;
+  --status-danger-bg: rgba(248, 113, 113, 0.12);
+  --status-danger-border: rgba(248, 113, 113, 0.28);
+
+  --border-subtle: rgba(255, 255, 255, 0.08);
+  --border-strong: rgba(255, 255, 255, 0.15);
+
+  --shadow-subtle: 0 1px 2px rgba(0, 0, 0, 0.3);
+  --shadow-input: 0 4px 16px rgba(0, 0, 0, 0.32);
+  --shadow-float: 0 16px 38px -12px rgba(0, 0, 0, 0.55);
 }
 
 * { box-sizing: border-box; }
@@ -61,7 +109,7 @@ body {
   margin: 0;
   min-width: 320px;
   font-family: var(--font-sans);
-  font-size: 15px;
+  font-size: 14.5px;
   font-weight: 400;
   line-height: 1.55;
   letter-spacing: -0.011em;
@@ -69,12 +117,32 @@ body {
   background: var(--bg-canvas);
 }
 
+/* Precision Thin Scrollbars (Replaces native Windows chrome bars) */
+* {
+  scrollbar-width: thin;
+  scrollbar-color: rgba(128, 136, 150, 0.26) transparent;
+}
+::-webkit-scrollbar {
+  width: 6px;
+  height: 6px;
+}
+::-webkit-scrollbar-track {
+  background: transparent;
+}
+::-webkit-scrollbar-thumb {
+  background: rgba(128, 136, 150, 0.26);
+  border-radius: 999px;
+}
+::-webkit-scrollbar-thumb:hover {
+  background: rgba(128, 136, 150, 0.44);
+}
+
 button, input, textarea, select { font: inherit; }
 a { color: var(--accent); text-decoration: none; }
 a:hover { text-decoration: underline; text-underline-offset: 3px; }
 button, a, input, textarea, select { -webkit-tap-highlight-color: transparent; }
 :focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
-::selection { background: rgba(30, 79, 194, 0.14); color: var(--text-primary); }
+::selection { background: var(--accent-tint-strong); color: var(--text-primary); }
 [hidden] { display: none !important; }
 
 .ori-visually-hidden {

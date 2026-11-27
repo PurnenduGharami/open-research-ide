@@ -63,6 +63,30 @@ const manuscriptSchema = z.object({
   updatedAt: z.string(),
 }).strict();
 
+const taskSchema = z.object({
+  id: z.string().min(1),
+  title: z.string().min(1),
+  stage: z.enum(["ideation", "literature", "analysis", "validation", "writing", "submission"]),
+  status: z.enum(["todo", "in-progress", "done"]),
+  priority: z.enum(["low", "medium", "high"]).default("medium"),
+  linkedNodeIds: z.array(z.string()).optional(),
+  linkedFilePath: z.string().optional(),
+  notes: z.string().optional(),
+  createdAt: z.string(),
+  updatedAt: z.string(),
+}).strict();
+
+const ideaSchema = z.object({
+  id: z.string().min(1),
+  title: z.string().min(1),
+  notes: z.string().default(""),
+  tags: z.array(z.string()).optional(),
+  status: z.enum(["spark", "exploring", "promoted", "parked"]).default("spark"),
+  promotedNodeId: z.string().optional(),
+  createdAt: z.string(),
+  updatedAt: z.string(),
+}).strict();
+
 export const projectSchema = z.object({
   schemaVersion: z.literal(1),
   projectId: z.string().min(1),
@@ -140,6 +164,9 @@ export const projectSchema = z.object({
     createdAt: z.string(),
   }).strict()),
   commandIds: z.array(z.string()),
+  tasks: z.array(taskSchema).optional(),
+  ideas: z.array(ideaSchema).optional(),
+  hypothesisMatrix: z.record(z.string(), z.record(z.string(), z.enum(["supports", "contradicts", "neutral"]))).optional(),
 }).strict();
 
 function safeProjectId(projectId) {
@@ -164,6 +191,10 @@ export function projectExportsDir(root, projectId) {
     return path.join(root, "workspace", PROJECTS_DIR, safeProjectId(projectId), "exports");
   }
   return path.join(root, "workspace", "exports");
+}
+
+export function projectFilesDir(root, projectId) {
+  return path.join(root, "workspace", PROJECTS_DIR, safeProjectId(projectId), "files");
 }
 
 function indexPath(root) {
@@ -365,11 +396,19 @@ function validateGraph(project) {
   for (const evidence of project.nodes.filter((node) => node.type === "evidence")) {
     const paper = papers.get(evidence.data.paperId);
     const quote = evidence.data.quote;
-    if (!paper || typeof quote !== "string" || !quote.trim() || typeof paper.data.abstract !== "string" || !paper.data.abstract.includes(quote)) {
-      throw new Error(`Evidence ${evidence.id} is not an exact substring of its paper abstract`);
+    if (evidence.data.sourceField === "fullText") {
+      if (!paper || typeof quote !== "string" || !quote.trim() || typeof paper.data.fullText !== "string" || !paper.data.fullText.includes(quote)) {
+        throw new Error(`Evidence ${evidence.id} is not an exact substring of its paper full text`);
+      }
+      evidence.data.quoteSha256 = sha256(quote);
+      evidence.data.fullTextSha256 = sha256(paper.data.fullText);
+    } else {
+      if (!paper || typeof quote !== "string" || !quote.trim() || typeof paper.data.abstract !== "string" || !paper.data.abstract.includes(quote)) {
+        throw new Error(`Evidence ${evidence.id} is not an exact substring of its paper abstract`);
+      }
+      evidence.data.quoteSha256 = sha256(quote);
+      evidence.data.abstractSha256 = sha256(paper.data.abstract);
     }
-    evidence.data.quoteSha256 = sha256(quote);
-    evidence.data.abstractSha256 = sha256(paper.data.abstract);
   }
 }
 
@@ -414,6 +453,16 @@ function apply(project, op, payload) {
         if (previous?.type === "paper" && node.type === "paper" && previous.data.abstract !== undefined && previous.data.abstract !== node.data.abstract) {
           throw new Error(`Paper ${node.id} cannot replace its immutable abstract snapshot`);
         }
+        if (previous?.type === "paper" && node.type === "paper" && previous.data.fullText !== undefined) {
+          if (node.data.fullText !== undefined && node.data.fullText !== previous.data.fullText) {
+            throw new Error(`Paper ${node.id} cannot replace its immutable full-text snapshot`);
+          }
+          node.data.fullText = previous.data.fullText;
+          if (previous.data.pages) node.data.pages = previous.data.pages;
+          if (previous.data.pageCount !== undefined) node.data.pageCount = previous.data.pageCount;
+          if (previous.data.fullTextSha256) node.data.fullTextSha256 = previous.data.fullTextSha256;
+          if (previous.data.pdfAssetPath) node.data.pdfAssetPath = previous.data.pdfAssetPath;
+        }
         if (previous?.type === "evidence" && node.type === "evidence") {
           if (previous.data.paperId !== node.data.paperId || previous.data.quote !== node.data.quote) {
             throw new Error(`Evidence ${node.id} cannot replace its paper or quote`);
@@ -451,6 +500,9 @@ function apply(project, op, payload) {
       if (!target) throw new Error("Research node not found");
       if (target.type === "paper" && payload.data && "abstract" in payload.data && payload.data.abstract !== target.data.abstract) {
         throw new Error(`Paper ${target.id} cannot replace its immutable abstract snapshot`);
+      }
+      if (target.type === "paper" && target.data.fullText !== undefined && payload.data && "fullText" in payload.data && payload.data.fullText !== target.data.fullText) {
+        throw new Error(`Paper ${target.id} cannot replace its immutable full-text snapshot`);
       }
       if (target.type === "evidence" && payload.data && (("quote" in payload.data && payload.data.quote !== target.data.quote) || ("paperId" in payload.data && payload.data.paperId !== target.data.paperId))) {
         throw new Error(`Evidence ${target.id} cannot replace its paper or quote`);
@@ -637,6 +689,80 @@ function apply(project, op, payload) {
       project.status = payload.status;
       if (payload.message) event(project, payload.status, payload.message);
       break;
+    case "attach_paper_fulltext": {
+      const paper = project.nodes.find((node) => node.id === payload.paperId && node.type === "paper");
+      if (!paper) throw new Error("Paper node not found");
+      if (paper.data.fullText !== undefined && paper.data.fullText !== payload.fullText) {
+        throw new Error(`Paper ${paper.id} cannot replace its immutable full-text snapshot`);
+      }
+      const fullText = String(payload.fullText || "");
+      if (!fullText.trim()) throw new Error("Extracted full text is empty");
+      paper.data.fullText = fullText;
+      paper.data.fullTextSha256 = payload.fullTextSha256 || sha256(fullText);
+      if (Array.isArray(payload.pages)) paper.data.pages = payload.pages;
+      if (typeof payload.pageCount === "number") paper.data.pageCount = payload.pageCount;
+      if (typeof payload.pdfAssetPath === "string" && payload.pdfAssetPath) paper.data.pdfAssetPath = payload.pdfAssetPath;
+      paper.updatedAt = at;
+      event(project, "literature", `Attached full-text PDF snapshot (${paper.data.pageCount || "multi"} pages) to ${paper.title}`, [paper.id]);
+      break;
+    }
+    case "upsert_task": {
+      const list = Array.isArray(project.tasks) ? [...project.tasks] : [];
+      const incomingId = payload.task?.id || id();
+      const prevIdx = list.findIndex((item) => item.id === incomingId);
+      const parsed = taskSchema.parse({
+        ...(prevIdx >= 0 ? list[prevIdx] : {}),
+        ...(payload.task || {}),
+        id: incomingId,
+        createdAt: prevIdx >= 0 ? list[prevIdx].createdAt : (payload.task?.createdAt || at),
+        updatedAt: at,
+      });
+      if (prevIdx >= 0) list[prevIdx] = parsed;
+      else list.unshift(parsed);
+      project.tasks = list;
+      event(project, "planning", `Task ${parsed.status}: ${parsed.title}`, parsed.linkedNodeIds || []);
+      break;
+    }
+    case "delete_task": {
+      project.tasks = (project.tasks || []).filter((item) => item.id !== payload.taskId);
+      event(project, "planning", `Removed task ${payload.taskId}`);
+      break;
+    }
+    case "upsert_idea": {
+      const list = Array.isArray(project.ideas) ? [...project.ideas] : [];
+      const incomingId = payload.idea?.id || id();
+      const prevIdx = list.findIndex((item) => item.id === incomingId);
+      const parsed = ideaSchema.parse({
+        ...(prevIdx >= 0 ? list[prevIdx] : {}),
+        ...(payload.idea || {}),
+        id: incomingId,
+        createdAt: prevIdx >= 0 ? list[prevIdx].createdAt : (payload.idea?.createdAt || at),
+        updatedAt: at,
+      });
+      if (prevIdx >= 0) list[prevIdx] = parsed;
+      else list.unshift(parsed);
+      project.ideas = list;
+      event(project, "ideation", `Idea updated: ${parsed.title}`);
+      break;
+    }
+    case "delete_idea": {
+      project.ideas = (project.ideas || []).filter((item) => item.id !== payload.ideaId);
+      event(project, "ideation", `Removed idea ${payload.ideaId}`);
+      break;
+    }
+    case "set_hypothesis_vote": {
+      const evidenceId = String(payload.evidenceId || "");
+      const hypothesisId = String(payload.hypothesisId || "");
+      const vote = ["supports", "contradicts", "neutral"].includes(payload.vote) ? payload.vote : "neutral";
+      if (!evidenceId || !hypothesisId) throw new Error("evidenceId and hypothesisId are required");
+      const matrix = { ...(project.hypothesisMatrix || {}) };
+      const row = { ...(matrix[evidenceId] || {}) };
+      row[hypothesisId] = vote;
+      matrix[evidenceId] = row;
+      project.hypothesisMatrix = matrix;
+      event(project, "analysis", `Matrix vote (${vote}) updated`, [evidenceId, hypothesisId]);
+      break;
+    }
     case "recover_interrupted": {
       const hasArtifacts = project.nodes.length > 0 || (project.messages?.length ?? 0) > 0;
       project.status = hasArtifacts ? "ready" : "error";
@@ -729,4 +855,45 @@ export async function recoverInterruptedProjects(root, activeProjectIds = new Se
     recovered.push(updated.projectId);
   }
   return recovered;
+}
+
+export function verifyProjectEvidenceHashes(project) {
+  const papers = new Map((project.nodes || []).filter((n) => n.type === "paper").map((n) => [n.id, n]));
+  const evidenceNodes = (project.nodes || []).filter((n) => n.type === "evidence");
+  const failed = [];
+  let verifiedCount = 0;
+  for (const ev of evidenceNodes) {
+    const paper = papers.get(ev.data?.paperId);
+    const quote = ev.data?.quote;
+    const sourceText = ev.data?.sourceField === "fullText" ? paper?.data?.fullText : paper?.data?.abstract;
+    if (!paper || typeof quote !== "string" || typeof sourceText !== "string" || !sourceText.includes(quote)) {
+      failed.push({ nodeId: ev.id, reason: "Quote is not an exact substring of the anchored paper snapshot" });
+      continue;
+    }
+    const expectedHash = sha256(quote);
+    if (ev.data?.quoteSha256 && ev.data.quoteSha256 !== expectedHash) {
+      failed.push({ nodeId: ev.id, reason: "Recorded quoteSha256 does not match anchored quote" });
+      continue;
+    }
+    verifiedCount += 1;
+  }
+  return { total: evidenceNodes.length, verified: verifiedCount, failed };
+}
+
+export async function saveImportedProject(root, rawProject) {
+  const parsed = projectSchema.parse(rawProject);
+  const draft = structuredClone(parsed);
+  const existing = await readProject(root, draft.projectId);
+  if (existing) {
+    draft.projectId = `${safeProjectId(draft.projectId).slice(0, 72)}-import-${id().slice(0, 8)}`;
+  }
+  draft.status = draft.status === "investigating" ? "ready" : draft.status;
+  validateGraph(draft);
+  const validated = projectSchema.parse(draft);
+  await atomicWriteJson(projectPath(root, validated.projectId), validated, false);
+  const index = await syncProjectToIndex(root, validated, true);
+  if (index.activeProjectId === validated.projectId) {
+    await atomicWriteJson(projectPath(root), validated, false);
+  }
+  return validated;
 }

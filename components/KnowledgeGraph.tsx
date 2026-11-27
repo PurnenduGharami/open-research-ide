@@ -30,7 +30,8 @@ import {
 } from "lucide-react";
 import type { LucideIcon } from "lucide-react";
 import { NODE_LABELS } from "../packages/contracts";
-import type { EdgeType, NodeType, ResearchNode, ResearchProject } from "../packages/contracts";
+import type { ContradictionResolution, EdgeType, NodeType, ResearchNode, ResearchProject } from "../packages/contracts";
+import { CONTRADICTION_RESOLUTION_LABELS } from "../src/contradictions";
 import "@xyflow/react/dist/style.css";
 
 export interface KnowledgeGraphProps {
@@ -95,6 +96,10 @@ function compareIds(a: ResearchNode, b: ResearchNode): number {
 
 function nodeDetail(node: ResearchNode): string | undefined {
   if (node.type === "paper") return [node.data.year, node.data.venue].filter(Boolean).join(" · ") || undefined;
+  if (node.type === "contradiction") {
+    const res = node.data.resolution as ContradictionResolution | undefined;
+    return (res && CONTRADICTION_RESOLUTION_LABELS[res]?.label) || "Click to compare passages";
+  }
   if (node.type === "review" && node.data.reviewer) return `${node.data.reviewer} reviewer`;
   if (node.type === "experiment" && node.data.modality) return `${node.data.modality} · expectations frozen`;
   if (node.type === "experiment" && node.data.expectedOutcomesFrozenAt) return "Expected outcomes frozen";
@@ -185,8 +190,8 @@ function buildGraph(
         focusable: false,
         className: `kfg-edge kfg-edge--${edge.type}${selected ? " kfg-edge--selected" : ""}`,
         style: { stroke: color, strokeWidth: selected ? 2.25 : 1.5 },
-        labelStyle: { fill: edge.type === "contradicts" ? "#b91c1c" : "#525760", fontSize: 10, fontWeight: 600 },
-        labelBgStyle: { fill: "#ffffff", fillOpacity: 0.96 },
+        labelStyle: { fill: edge.type === "contradicts" ? "var(--status-danger)" : "var(--text-secondary)", fontSize: 10, fontWeight: 600 },
+        labelBgStyle: { fill: "var(--bg-surface)", fillOpacity: 0.96 },
         labelBgPadding: [6, 4],
         labelBgBorderRadius: 6,
         markerEnd: { type: MarkerType.ArrowClosed, color, width: 16, height: 16 },
@@ -304,7 +309,7 @@ export function KnowledgeGraph({ project, selectedNodeId, onSelectNode }: Knowle
               role="group"
               aria-label={`Interactive knowledge graph for revision ${project.revision}.`}
             >
-              <Background variant={BackgroundVariant.Dots} color="#e0e0e0" gap={24} size={1.2} />
+              <Background variant={BackgroundVariant.Dots} color="var(--border-strong)" gap={24} size={1.2} />
               <Controls position="bottom-left" showInteractive={false} />
               <MiniMap<GraphNode>
                 className="kfg-minimap"
@@ -312,10 +317,10 @@ export function KnowledgeGraph({ project, selectedNodeId, onSelectNode }: Knowle
                 pannable
                 zoomable
                 ariaLabel="Knowledge graph minimap"
-                bgColor="#ffffff"
-                maskColor="rgba(245, 245, 247, 0.72)"
+                bgColor="var(--bg-surface)"
+                maskColor="var(--bg-hover)"
                 nodeColor={(node) => NODE_COLORS[node.data.kind]}
-                nodeStrokeColor="#e0e0e0"
+                nodeStrokeColor="var(--border-subtle)"
                 nodeBorderRadius={8}
               />
               <Panel position="top-right" className="kfg-canvas-note">Drag nodes · scroll to pan · pinch to zoom</Panel>

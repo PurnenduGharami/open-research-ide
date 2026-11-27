@@ -1,8 +1,8 @@
 {
   "name": "open-research-ide",
-  "version": "0.2.0",
+  "version": "1.0.0",
   "private": true,
-  "description": "A local-first, harness-agnostic Scientific Research IDE with grounded literature, independent review panels, multi-modal validation, and reproducible exports.",
+  "description": "Open-source, local-first Scientific Research IDE combining file/notebook organization (CodeMirror + KaTeX), full-text PDF reading (PDF.js/unpdf), Zotero-class citations (Citation.js), PRISMA screening & citation snowballing, statistical analysis & SVG figures, Overleaf-grade LaTeX/manuscript drafting, and RO-Crate reproducibility—with optional Google Gemini & Gemma assistance.",
   "license": "MIT",
   "type": "module",
   "engines": {
@@ -12,31 +12,45 @@
     "setup": "node scripts/setup.mjs",
     "dev": "next dev --hostname 127.0.0.1 --port 3000",
     "build": "next build",
-    "start": "next start --hostname 127.0.0.1 --port 3000",
+    "start": "next start",
     "typecheck": "tsc --noEmit",
     "test": "node --test tests/*.test.mjs",
     "test:ui": "node scripts/ui-smoke.mjs",
     "test:fixture-ui": "node tests/ui-e2e.mjs",
-    "preflight": "node scripts/preflight.mjs"
+    "preflight": "node scripts/preflight.mjs",
+    "deploy:cloudrun": "gcloud run deploy open-research-ide --source . --region us-central1 --allow-unauthenticated",
+    "deploy:firebase": "npx -y firebase-tools@latest deploy"
   },
   "dependencies": {
-    "@openclaw/gateway-client": "2026.8.1",
-    "@openclaw/gateway-protocol": "2026.8.1",
+    "@citation-js/core": "^0.9.0",
+    "@citation-js/plugin-bibtex": "^0.9.0",
+    "@citation-js/plugin-csl": "^0.9.0",
+    "@citation-js/plugin-ris": "^0.9.0",
+    "@codemirror/lang-javascript": "^6.2.5",
+    "@codemirror/lang-markdown": "^6.5.2",
+    "@codemirror/lang-python": "^6.2.1",
+    "@codemirror/state": "^6.7.6",
+    "@codemirror/view": "^6.44.2",
+    "@types/katex": "^0.16.8",
     "@xyflow/react": "13.0.2",
+    "codemirror": "^6.0.2",
+    "jszip": "^3.10.2",
+    "katex": "^0.19.1",
     "lucide-react": "^0.577.0",
+    "marked": "^18.3.0",
     "next": "16.4.6",
     "playwright": "^1.58.2",
     "react": "19.3.1",
     "react-dom": "19.3.1",
+    "simple-statistics": "^8.0.0",
     "typebox": "^1.3.37",
-    "ws": "^8.19.0",
+    "unpdf": "^2.2.3",
     "zod": "4.6.7"
   },
   "devDependencies": {
     "@types/node": "^24.10.0",
     "@types/react": "^19.2.0",
     "@types/react-dom": "^19.2.0",
-    "@types/ws": "^8.18.1",
     "typescript": "5.9.3"
   }
 }

@@ -2,6 +2,7 @@ import type { Metadata, Viewport } from "next";
 import { IBM_Plex_Mono, Instrument_Serif, Inter } from "next/font/google";
 import type { ReactNode } from "react";
 import "./globals.css";
+import "katex/dist/katex.min.css";
 import "../dashboard/styles.css";
 import "../components/graph.css";
 import "../components/export.css";

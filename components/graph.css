@@ -1,16 +1,16 @@
 .kfg-shell {
-  --kfg-canvas: #fcfcfb;
-  --kfg-surface: #ffffff;
-  --kfg-secondary: #f5f5f3;
-  --kfg-selected: rgba(30, 79, 194, 0.06);
-  --kfg-ink: #111315;
-  --kfg-secondary-ink: #525760;
-  --kfg-tertiary: #787e88;
-  --kfg-hairline: #e6e6e2;
-  --kfg-accent: #1e4fc2;
-  --kfg-focus: #1e4fc2;
-  --kfg-contradiction: #b91c1c;
-  --kfg-warning: #92400e;
+  --kfg-canvas: var(--bg-canvas);
+  --kfg-surface: var(--bg-surface);
+  --kfg-secondary: var(--bg-subtle);
+  --kfg-selected: var(--accent-tint);
+  --kfg-ink: var(--text-primary);
+  --kfg-secondary-ink: var(--text-secondary);
+  --kfg-tertiary: var(--text-muted);
+  --kfg-hairline: var(--border-subtle);
+  --kfg-accent: var(--accent);
+  --kfg-focus: var(--accent);
+  --kfg-contradiction: var(--status-danger);
+  --kfg-warning: var(--status-warn);
   container: kfg / inline-size;
   min-width: 0;
   color: var(--kfg-ink);
@@ -116,7 +116,7 @@
 .react-flow__node:focus-visible .kfg-node,
 .kfg-node--selected {
   border: 1.5px solid var(--kfg-focus);
-  background: #f7f9fe;
+  background: var(--accent-tint);
 }
 
 .kfg-node-kind {
@@ -237,7 +237,7 @@
   text-align: left;
   cursor: pointer;
 }
-.kfg-node-index-button--selected { border-color: var(--kfg-focus); background: #f7f9fe; }
+.kfg-node-index-button--selected { border-color: var(--kfg-focus); background: var(--accent-tint); }
 .kfg-index-icon { display: grid; place-items: center; width: 30px; height: 30px; border-radius: 8px; background: var(--kfg-secondary); color: var(--kfg-accent); }
 .kfg-index-copy { display: grid; gap: 2px; min-width: 0; }
 .kfg-index-kind { color: var(--kfg-tertiary); font-family: var(--font-mono); font-size: 10px; text-transform: uppercase; }

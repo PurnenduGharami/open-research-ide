@@ -10,8 +10,10 @@ export async function POST(request: NextRequest) {
     requireSameOrigin(request);
     const body = await request.json();
     if (typeof body.paperId !== "string" || !body.paperId) throw new Error("Paper ID is required");
-    const quote = boundedText(body.quote, "Abstract passage", 8, 2000);
-    const title = typeof body.title === "string" && body.title.trim() ? body.title.trim().slice(0, 200) : "Human-curated abstract passage";
+    const quote = boundedText(body.quote, "Source passage", 8, 2000);
+    const title = typeof body.title === "string" && body.title.trim() ? body.title.trim().slice(0, 200) : "Human-curated passage";
+    const sourceField = body.sourceField === "fullText" ? "fullText" : "abstract";
+    const page = typeof body.page === "number" && Number.isFinite(body.page) && body.page > 0 ? Math.floor(body.page) : undefined;
     const projectId = typeof body.projectId === "string" ? body.projectId : undefined;
     const current = await readProject(projectRoot, projectId);
     if (!current) throw new Error("No investigation exists");
@@ -27,14 +29,20 @@ export async function POST(request: NextRequest) {
           type: "evidence",
           title,
           sourceRefs: [body.paperId],
-          data: { paperId: body.paperId, quote, curationSource: "human" },
+          data: {
+            paperId: body.paperId,
+            quote,
+            sourceField,
+            ...(page ? { page } : {}),
+            curationSource: "human",
+          },
         }],
         edges: [{
           id: `edge:${nodeId}:${body.paperId}`,
           source: nodeId,
           target: body.paperId,
           type: "supports",
-          label: "Exact abstract highlight",
+          label: sourceField === "fullText" ? `Full-text PDF highlight${page ? ` (p.${page})` : ""}` : "Exact abstract highlight",
         }],
       },
     });

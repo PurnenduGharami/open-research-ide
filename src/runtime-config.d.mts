@@ -4,12 +4,19 @@ export interface RuntimeConfig {
   harness: HarnessType;
   orchestrator: RoleModelConfig;
   reviewers: RoleModelConfig;
-  openclawGatewayUrl: string;
+  vertexProject?: string;
+  vertexLocation?: string;
   secrets: Record<string, string>;
 }
 
 export const DEFAULT_MODEL: string;
-export const PROVIDER_DEFAULTS: Record<ProviderType, { label: string; defaultModel: string; envKey: string; baseUrl: string }>;
+export const PROVIDER_DEFAULTS: Record<ProviderType, {
+  label: string;
+  defaultModel: string;
+  envKey: string;
+  fallbackEnvKeys: string[];
+  baseUrl: string;
+}>;
 export function runtimeConfigPath(root?: string): string;
 export function readRuntimeConfig(root?: string): Promise<RuntimeConfig>;
 export function resolveProviderApiKey(provider: ProviderType, config?: RuntimeConfig): string;

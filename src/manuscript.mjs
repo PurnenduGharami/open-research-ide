@@ -1,5 +1,7 @@
 import path from "node:path";
 import { auditManuscriptProse, humanizeProseText } from "./prose-linter.mjs";
+import { invokeModelProvider } from "./providers/model-provider.mjs";
+import { readRuntimeConfig } from "./runtime-config.mjs";
 
 function formatCitation(paper, indexMap) {
   const num = indexMap.get(paper.id);
@@ -165,4 +167,55 @@ export async function draftManuscriptFromProject(project, options = {}) {
   const valeConfigPath = options.root ? path.join(options.root, ".vale.ini") : undefined;
   draft.proseAudit = await auditManuscriptProse(draft, { valeConfigPath });
   return draft;
+}
+
+export async function polishManuscriptSectionWithGemini(project, sectionHeading, currentText, root = process.cwd()) {
+  const runtimeConfig = await readRuntimeConfig(root);
+  const papers = (project.nodes || []).filter((n) => n.type === "paper");
+  const verifiedEvidence = (project.nodes || []).filter((n) => n.type === "evidence" && n.data?.verified === true);
+  const results = (project.nodes || []).filter((n) => n.type === "result");
+
+  const contextPacket = {
+    curiosity: project.curiosity,
+    sectionHeading,
+    papers: papers.map((p) => ({
+      id: p.id,
+      citeKey: p.data?.citeKey || p.id,
+      title: p.title,
+      year: p.data?.year,
+    })),
+    verifiedEvidence: verifiedEvidence.map((e) => ({
+      id: e.id,
+      paperId: e.data?.paperId,
+      quote: e.data?.quote,
+    })),
+    observedResults: results.map((r) => ({
+      id: r.id,
+      title: r.title,
+      observations: r.data?.observations,
+      metricResults: r.data?.metricResults,
+    })),
+  };
+
+  const result = await invokeModelProvider({
+    roleConfig: runtimeConfig.orchestrator,
+    runtimeConfig,
+    system: [
+      "You are a disciplined scientific manuscript editor.",
+      "Rewrite and strengthen the provided manuscript section into crisp academic prose grounded STRICTLY in the supplied verifiedEvidence, papers, and observedResults.",
+      "NEVER invent statistics, DOIs, sample sizes, or claims not present in the input text or context packet.",
+      "Preserve or insert inline citation tags using [@citeKey] format and avoid AI clichés (delve, tapestry, landscape, leverage, paradigm shift, crucial role).",
+      "Return ONLY the revised section text with no surrounding markdown fences or preamble.",
+    ].join("\n"),
+    messages: [
+      {
+        role: "user",
+        content: `Section: ${sectionHeading}\n\nGrounded Context:\n${JSON.stringify(contextPacket, null, 2)}\n\nCurrent Draft Text:\n${currentText}`,
+      },
+    ],
+  });
+
+  const revised = String(result.text || "").trim();
+  if (!revised) throw new Error("Gemini returned empty section prose");
+  return humanizeProseText(revised);
 }

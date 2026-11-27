@@ -1,32 +1,46 @@
 "use client";
 
-import { useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import type { FormEvent, ReactNode } from "react";
 import {
   AlertCircle,
+  AlertTriangle,
+  ArrowUpRight,
   BookOpen,
   Check,
   CheckCircle2,
   ClipboardCheck,
   Clock,
+  Columns2,
   Download,
   ExternalLink,
   FileText,
   FlaskConical,
+  FolderOpen,
+  FolderTree,
   Lightbulb,
   LoaderCircle,
   Microscope,
+  Moon,
   Network,
+  Package,
   PanelRight,
   Plus,
+  Search,
   Send,
   ShieldCheck,
   Square,
+  Sun,
   Trash2,
+  X,
   XCircle,
 } from "lucide-react";
+import { CommandPalette, WorkspaceSidebar } from "../components";
+import type { SidebarTab } from "../components";
 import { NODE_LABELS } from "../packages/contracts";
 import type {
+  ContradictionResolution,
+  DiagnosticItem,
   ExperimentModality,
   InvestigationMode,
   ManuscriptDocument,
@@ -37,9 +51,20 @@ import type {
   RunTelemetry,
   SetupStatus,
   ViewId,
+  WorkspaceFileEntry,
 } from "../packages/contracts";
+import {
+  CONTRADICTION_RESOLUTION_LABELS,
+  abstractSnippet,
+  resolveContradictionSides,
+  splitAbstractAroundQuote,
+} from "../src/contradictions";
+import { computeProjectDiagnostics } from "../src/diagnostics";
+import { FilesWorkspace } from "./FilesWorkspace";
 import { LandingHome } from "./LandingHome";
+import { LiteratureWorkspace } from "./LiteratureWorkspace";
 import { ManuscriptStudio } from "./ManuscriptStudio";
+import { CompetingHypothesesPanel, IdeationAndTasksPanel } from "./PlanningPanels";
 import { SetupModal } from "./SetupModal";
 import { TestingWorkspace } from "./TestingWorkspace";
 import { MonoMeta, SectionHeader, StatusBadge } from "./ui";
@@ -47,6 +72,7 @@ import { MonoMeta, SectionHeader, StatusBadge } from "./ui";
 export interface DashboardProps {
   project: ResearchProject | null;
   projects: ResearchProjectSummary[];
+  files: WorkspaceFileEntry[];
   showHome: boolean;
   telemetry: RunTelemetry;
   streamingDelta: string;
@@ -56,6 +82,11 @@ export interface DashboardProps {
   onSelectProject: (projectId: string) => void;
   onDeleteProject: (projectId: string) => void;
   onStart: (curiosity: string, mode: InvestigationMode) => void;
+  onLoadSample: () => void;
+  onCreateBlank: () => void;
+  onImportBundle: (file: File) => void;
+  onRefreshFiles: (projectId?: string) => Promise<void>;
+  onProjectSaved: (project: ResearchProject) => Promise<void>;
   onContinue: (message: string) => void;
   onTriggerReviewPanel: () => void;
   onSynthesizeExperiment: (modality?: ExperimentModality) => void;
@@ -63,10 +94,19 @@ export interface DashboardProps {
   onPreflight: () => Promise<SetupStatus>;
   onSaveConfig: (payload: Record<string, unknown>) => Promise<SetupStatus>;
   onSelectNode: (id: string) => void;
+  onJumpToPassage: (paperId: string, quote?: string) => void;
   selectedNodeId?: string;
+  highlightedQuote?: string;
   onEvidenceAction: (id: string, action: "confirm" | "unconfirm" | "reject") => void;
-  onAddManualEvidence: (paperId: string, quote: string, title?: string) => void;
+  onAddManualEvidence: (paperId: string, quote: string, title?: string, meta?: { sourceField?: "abstract" | "fullText"; page?: number }) => void;
   onAddPaperByDoi: (doi: string) => void;
+  onImportReferences: (payload: Record<string, unknown>) => Promise<void>;
+  onSearchDirect: (query: string) => Promise<Array<Record<string, unknown>>>;
+  onAddSearchedPapers: (papers: Array<Record<string, unknown>>) => Promise<void>;
+  onUploadPdf: (file: File, paperId?: string) => Promise<void>;
+  onFetchOaPdf: (paperId: string) => Promise<void>;
+  onSnowballPaper: (paperId: string, direction: "references" | "citations" | "both") => Promise<void>;
+  onPlanningAction: (payload: Record<string, unknown>) => Promise<void>;
   onUpdateNode: (nodeId: string, patch: { title?: string; data?: Record<string, unknown> }) => void;
   onDeleteNode: (nodeId: string) => void;
   onRunCode: (experimentId: string, code: string) => void;
@@ -81,7 +121,7 @@ export interface DashboardProps {
     datasetName?: string;
     sourceModality?: ExperimentModality;
   }) => void;
-  onManuscriptAction: (action: "draft" | "audit" | "humanize" | "save", manuscript?: ManuscriptDocument) => void;
+  onManuscriptAction: (action: "draft" | "audit" | "humanize" | "save" | "ai-refine", manuscript?: ManuscriptDocument, extra?: { sectionId?: string }) => void;
   onExport: () => void;
   busy: boolean;
   error?: string;
@@ -91,11 +131,19 @@ export interface DashboardProps {
 
 const NAV_ITEMS: Array<{ id: ViewId; label: string; icon: typeof Microscope }> = [
   { id: "research", label: "Research", icon: Microscope },
+  { id: "workspace", label: "Files & Notes", icon: FolderOpen },
   { id: "literature", label: "Literature", icon: BookOpen },
   { id: "experiments", label: "Validation", icon: FlaskConical },
   { id: "graph", label: "Knowledge Graph", icon: Network },
   { id: "manuscript", label: "Manuscript", icon: FileText },
-  { id: "published", label: "Published", icon: Download },
+  { id: "published", label: "Published", icon: Package },
+];
+
+const TRIAGE_OPTIONS: ContradictionResolution[] = [
+  "true-disagreement",
+  "different-definitions",
+  "different-conditions",
+  "unresolved",
 ];
 
 function formatElapsed(elapsedMs?: number): string {
@@ -105,10 +153,20 @@ function formatElapsed(elapsedMs?: number): string {
   return `${min}:${String(sec % 60).padStart(2, "0")}`;
 }
 
+function countFlatFiles(entries: WorkspaceFileEntry[]): number {
+  let total = 0;
+  for (const e of entries) {
+    if (e.kind === "file") total += 1;
+    if (e.children) total += countFlatFiles(e.children);
+  }
+  return total;
+}
+
 export function ResearchDashboard(props: DashboardProps) {
   const {
     project,
     projects,
+    files,
     showHome,
     telemetry,
     streamingDelta,
@@ -118,6 +176,11 @@ export function ResearchDashboard(props: DashboardProps) {
     onSelectProject,
     onDeleteProject,
     onStart,
+    onLoadSample,
+    onCreateBlank,
+    onImportBundle,
+    onRefreshFiles,
+    onProjectSaved,
     onContinue,
     onTriggerReviewPanel,
     onSynthesizeExperiment,
@@ -125,10 +188,19 @@ export function ResearchDashboard(props: DashboardProps) {
     onPreflight,
     onSaveConfig,
     onSelectNode,
+    onJumpToPassage,
     selectedNodeId,
+    highlightedQuote,
     onEvidenceAction,
     onAddManualEvidence,
     onAddPaperByDoi,
+    onImportReferences,
+    onSearchDirect,
+    onAddSearchedPapers,
+    onUploadPdf,
+    onFetchOaPdf,
+    onSnowballPaper,
+    onPlanningAction,
     onUpdateNode,
     onDeleteNode,
     onRunCode,
@@ -144,16 +216,68 @@ export function ResearchDashboard(props: DashboardProps) {
     exportPanel,
   } = props;
 
-  const [inspectorVisible, setInspectorVisible] = useState(true);
+  const [sidebarVisible, setSidebarVisible] = useState(true);
+  const [sidebarTab, setSidebarTab] = useState<SidebarTab>("explorer");
+  const [inspectorVisible, setInspectorVisible] = useState(false);
+  const [theme, setTheme] = useState<"light" | "dark">("light");
+  const [paletteOpen, setPaletteOpen] = useState(false);
+  const [paletteMode, setPaletteMode] = useState<"commands" | "search">("commands");
+  const [requestedFilePath, setRequestedFilePath] = useState<string | undefined>();
+  const [statsCsvPath, setStatsCsvPath] = useState<string | undefined>();
+  const [researchSubTab, setResearchSubTab] = useState<"canvas" | "planning" | "matrix">("canvas");
   const [followUp, setFollowUp] = useState("");
-  const [doiInput, setDoiInput] = useState("");
+
+  useEffect(() => {
+    try {
+      const saved = window.localStorage.getItem("ori-theme");
+      if (saved === "dark" || saved === "light") {
+        setTheme(saved);
+        document.documentElement.dataset.theme = saved;
+      }
+    } catch { /* ignore storage restrictions */ }
+  }, []);
+
+  const toggleTheme = () => {
+    const next = theme === "light" ? "dark" : "light";
+    setTheme(next);
+    document.documentElement.dataset.theme = next;
+    try { window.localStorage.setItem("ori-theme", next); } catch { /* ignore */ }
+  };
+
+  useEffect(() => {
+    if (selectedNodeId) setInspectorVisible(true);
+  }, [selectedNodeId]);
+
+  useEffect(() => {
+    if (showHome || !project) return;
+    const onKeyDown = (event: globalThis.KeyboardEvent) => {
+      if ((event.ctrlKey || event.metaKey) && event.shiftKey && event.key.toLowerCase() === "f") {
+        event.preventDefault();
+        setPaletteMode("search");
+        setPaletteOpen(true);
+      } else if ((event.ctrlKey || event.metaKey) && event.key.toLowerCase() === "k") {
+        event.preventDefault();
+        setPaletteMode("commands");
+        setPaletteOpen(true);
+      } else if ((event.ctrlKey || event.metaKey) && event.key.toLowerCase() === "b") {
+        event.preventDefault();
+        setSidebarVisible((v) => !v);
+      }
+    };
+    window.addEventListener("keydown", onKeyDown);
+    return () => window.removeEventListener("keydown", onKeyDown);
+  }, [showHome, project]);
 
   const active = telemetry.status === "running" || telemetry.status === "connecting";
   const selectedNode = project?.nodes.find((n) => n.id === selectedNodeId);
   const isLanding = showHome || !project;
+  const totalFiles = countFlatFiles(files);
+  const diagnostics = computeProjectDiagnostics(project, files);
+  const problemCount = diagnostics.filter((d) => d.severity !== "info").length;
 
   const counts: Record<ViewId, number> = {
     research: project?.uiBlocks.length ?? 0,
+    workspace: totalFiles,
     literature: project?.nodes.filter((n) => n.type === "paper").length ?? 0,
     experiments: project?.nodes.filter((n) => n.type === "experiment").length ?? 0,
     graph: project?.nodes.length ?? 0,
@@ -168,68 +292,161 @@ export function ResearchDashboard(props: DashboardProps) {
     setFollowUp("");
   };
 
-  const handleAddDoi = (event: FormEvent) => {
-    event.preventDefault();
-    if (!doiInput.trim() || busy) return;
-    onAddPaperByDoi(doiInput.trim());
-    setDoiInput("");
+  const handleOpenFile = (filePath: string) => {
+    setRequestedFilePath(filePath);
+    onViewChange("workspace");
+  };
+
+  const handleCreateNote = async (notePath: string) => {
+    if (!project) return;
+    await fetch("/api/files", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ projectId: project.projectId, action: "write", path: notePath, content: `# ${notePath}\n\n` }),
+    });
+    await onRefreshFiles(project.projectId);
+    handleOpenFile(notePath);
+  };
+
+  const handleCreateFolder = async (folderPath: string) => {
+    if (!project) return;
+    await fetch("/api/files", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ projectId: project.projectId, action: "mkdir", path: folderPath }),
+    });
+    await onRefreshFiles(project.projectId);
+  };
+
+  const handleDeleteFile = async (relPath: string) => {
+    if (!project) return;
+    await fetch("/api/files", {
+      method: "DELETE",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ projectId: project.projectId, path: relPath }),
+    });
+    await onRefreshFiles(project.projectId);
+  };
+
+  const handleSelectDiagnostic = (item: DiagnosticItem) => {
+    onViewChange(item.targetView);
+    if (item.nodeId) {
+      onSelectNode(item.nodeId);
+      setInspectorVisible(true);
+    }
+    if (item.filePath) {
+      handleOpenFile(item.filePath);
+    }
   };
 
   const hasTps = typeof telemetry.outputTokens === "number" && telemetry.outputTokens > 0 && typeof telemetry.outputTps === "number";
+
+  const workspaceClass = [
+    "ori-workspace",
+    sidebarVisible ? "ori-workspace--with-sidebar" : "",
+    inspectorVisible ? "" : "ori-workspace--no-inspector",
+  ].filter(Boolean).join(" ");
+
+  const toggleRailTool = (tool: SidebarTab) => {
+    if (sidebarVisible && sidebarTab === tool) {
+      setSidebarVisible(false);
+    } else {
+      setSidebarTab(tool);
+      setSidebarVisible(true);
+    }
+  };
 
   return (
     <div className="ori-app">
       <a className="ori-skip-link" href="#ori-main-content">Skip to main content</a>
 
-      {/* Unified Precision Light Header */}
+      {/* Clean 46px Precision Titlebar — Zero top tabs, zero collisions */}
       <header className="ori-topbar">
         <div className="ori-topbar-left">
           <button type="button" className="ori-brand-btn" onClick={onGoHome}>
-            <span className="ori-brand-mark" aria-hidden="true"><Microscope size={14} /></span>
-            <span>Open Research IDE</span>
-          </button>
-          <span className="ori-topbar-divider" aria-hidden="true" />
-          <button type="button" className="ori-btn ori-btn--ghost ori-btn--sm" onClick={onGoHome} aria-label="New research">
-            <Plus size={14} aria-hidden="true" />
-            <span>New</span>
+            <span className="ori-brand-mark" aria-hidden="true"><Microscope size={13} /></span>
+            <span>Open Research</span>
           </button>
           {projects.length > 0 ? (
-            <select
-              aria-label="Switch research project"
-              className="ori-project-select"
-              value={!isLanding && project ? project.projectId : ""}
-              onChange={(e) => { if (e.target.value) onSelectProject(e.target.value); }}
+            <>
+              <span className="ori-topbar-slash" aria-hidden="true">/</span>
+              <select
+                aria-label="Switch research project"
+                className="ori-project-select"
+                value={!isLanding && project ? project.projectId : ""}
+                onChange={(e) => { if (e.target.value) onSelectProject(e.target.value); }}
+              >
+                <option value="" disabled>Projects ({projects.length})</option>
+                {projects.map((p) => (
+                  <option key={p.projectId} value={p.projectId}>{p.title.slice(0, 48)}</option>
+                ))}
+              </select>
+            </>
+          ) : null}
+          <button type="button" className="ori-rail-mini-btn" onClick={onGoHome} aria-label="New research" title="New investigation / home">
+            <Plus size={14} aria-hidden="true" />
+          </button>
+        </div>
+
+        <div className="ori-topbar-center">
+          {!isLanding && project ? (
+            <button
+              type="button"
+              className="ori-cmd-trigger"
+              onClick={() => {
+                setPaletteMode("commands");
+                setPaletteOpen(true);
+              }}
+              aria-label="Open command palette (Ctrl+K)"
             >
-              <option value="" disabled>Projects ({projects.length})</option>
-              {projects.map((p) => (
-                <option key={p.projectId} value={p.projectId}>{p.title.slice(0, 44)}</option>
-              ))}
-            </select>
+              <Search size={13} aria-hidden="true" />
+              <span>Search papers, files, commands…</span>
+              <kbd>⌘K</kbd>
+            </button>
           ) : null}
         </div>
 
-        {!isLanding && project ? (
-          <nav className="ori-topbar-nav" aria-label="Research views">
-            {NAV_ITEMS.map(({ id, label }) => (
-              <button
-                key={id}
-                type="button"
-                className={`ori-nav-tab${activeView === id ? " ori-nav-tab--active" : ""}`}
-                onClick={() => onViewChange(id)}
-                aria-current={activeView === id ? "page" : undefined}
-              >
-                <span>{label}</span>
-                <span className="ori-nav-count">{counts[id]}</span>
-              </button>
-            ))}
-          </nav>
-        ) : <div />}
-
         <div className="ori-topbar-right">
+          {!isLanding && project && active ? (
+            <div className="ori-live-pill">
+              <LoaderCircle size={12} className="ori-spin" />
+              <span>{formatElapsed(telemetry.elapsedMs)}</span>
+              {hasTps ? <span>· {telemetry.outputTps!.toFixed(1)} tps</span> : null}
+              <button type="button" className="ori-pill-stop" onClick={onStop} disabled={busy} aria-label="Stop active run">
+                <Square size={10} />
+              </button>
+            </div>
+          ) : null}
+
+          {!isLanding && project ? (
+            <button
+              type="button"
+              className={`ori-btn ori-btn--ghost ori-btn--sm${inspectorVisible ? " ori-btn--tinted" : ""}`}
+              onClick={() => setInspectorVisible((v) => !v)}
+              aria-expanded={inspectorVisible}
+              aria-label="Toggle inspector"
+              title="Toggle Node Inspector"
+            >
+              <PanelRight size={14} />
+              <span className="ori-hide-mobile">Inspector</span>
+            </button>
+          ) : null}
+
+          <button
+            type="button"
+            className="ori-rail-mini-btn"
+            onClick={toggleTheme}
+            aria-label="Toggle color theme"
+            title={theme === "light" ? "Switch to Obsidian Dark theme" : "Switch to Precision Light theme"}
+          >
+            {theme === "light" ? <Moon size={14} aria-hidden="true" /> : <Sun size={14} aria-hidden="true" />}
+          </button>
+
           <SetupModal onPreflight={onPreflight} onSaveConfig={onSaveConfig} />
+
           {!isLanding && project ? (
             <button type="button" className="ori-btn ori-btn--primary ori-btn--sm" onClick={onExport} disabled={busy}>
-              <Download size={14} aria-hidden="true" />
+              <Download size={13} aria-hidden="true" />
               <span>Export</span>
             </button>
           ) : null}
@@ -242,47 +459,101 @@ export function ResearchDashboard(props: DashboardProps) {
           busy={busy}
           error={error}
           onStart={onStart}
+          onLoadSample={onLoadSample}
+          onCreateBlank={onCreateBlank}
+          onImportBundle={onImportBundle}
           onSelectProject={onSelectProject}
           onDeleteProject={onDeleteProject}
         />
       ) : (
         <>
-          {/* Context & Telemetry Strip */}
-          <div className="ori-context-bar">
-            <div className="ori-context-title">
-              <h1>{project.title}</h1>
-              <MonoMeta>r{project.revision}</MonoMeta>
-              <StatusBadge tone="neutral">{project.mode === "autonomous" ? "Autonomous" : "Guided"}</StatusBadge>
-              <StatusBadge tone={project.status === "error" ? "danger" : project.status === "investigating" ? "accent" : "ok"}>
-                {project.status}
-              </StatusBadge>
-            </div>
-            <div className="ori-context-meta">
-              <div className="ori-telemetry" aria-label="Run telemetry">
-                <span><Clock size={12} style={{ verticalAlign: "-2px" }} /> <span className="ori-telemetry-val">{formatElapsed(telemetry.elapsedMs)}</span></span>
-                <span>{telemetry.outputTpsLabel}: <span className="ori-telemetry-val">{hasTps ? telemetry.outputTps!.toFixed(1) : "—"}</span></span>
+          <div className={workspaceClass}>
+            {/* Unified Left Activity Rail (Single Source of Navigation Truth) */}
+            <nav className="ori-rail" aria-label="Research views">
+              <div className="ori-rail-group">
+                {NAV_ITEMS.map(({ id, label, icon: Icon }) => {
+                  const isActive = activeView === id;
+                  return (
+                    <button
+                      key={id}
+                      type="button"
+                      className={`ori-rail-btn${isActive ? " ori-rail-btn--active" : ""}`}
+                      onClick={() => onViewChange(id)}
+                      aria-label={`${label} (${counts[id]})`}
+                      aria-current={isActive ? "page" : undefined}
+                      title={`${label} (${counts[id]})`}
+                    >
+                      <Icon size={17} strokeWidth={isActive ? 2 : 1.75} aria-hidden="true" />
+                      <span className="ori-rail-mobile-label">{label}</span>
+                    </button>
+                  );
+                })}
               </div>
-              {active ? (
-                <button type="button" className="ori-btn ori-btn--danger ori-btn--sm" onClick={onStop} disabled={busy}>
-                  <Square size={12} /> Stop
-                </button>
-              ) : null}
-              <button
-                type="button"
-                className="ori-btn ori-btn--secondary ori-btn--sm"
-                onClick={() => setInspectorVisible((v) => !v)}
-                aria-expanded={inspectorVisible}
-                aria-label="Toggle inspector"
-              >
-                <PanelRight size={14} /> Inspector
-              </button>
-            </div>
-          </div>
 
-          <div className={`ori-workspace${inspectorVisible ? "" : " ori-workspace--no-inspector"}`}>
+              <div className="ori-rail-bottom ori-hide-mobile">
+                <button
+                  type="button"
+                  className={`ori-rail-btn${sidebarVisible && sidebarTab === "explorer" ? " ori-rail-btn--tool-active" : ""}`}
+                  onClick={() => toggleRailTool("explorer")}
+                  aria-label="Workspace Files Explorer"
+                  title="Explorer (Ctrl+B)"
+                >
+                  <FolderTree size={16} aria-hidden="true" />
+                </button>
+                <button
+                  type="button"
+                  className={`ori-rail-btn${sidebarVisible && sidebarTab === "search" ? " ori-rail-btn--tool-active" : ""}`}
+                  onClick={() => toggleRailTool("search")}
+                  aria-label="Workspace Search"
+                  title="Search (Ctrl+Shift+F)"
+                >
+                  <Search size={16} aria-hidden="true" />
+                </button>
+                <button
+                  type="button"
+                  className={`ori-rail-btn${sidebarVisible && sidebarTab === "problems" ? " ori-rail-btn--tool-active" : ""}`}
+                  onClick={() => toggleRailTool("problems")}
+                  aria-label={`Problems (${problemCount})`}
+                  title={`Problems (${problemCount})`}
+                >
+                  <AlertTriangle size={16} aria-hidden="true" />
+                  {problemCount > 0 ? <span className="ori-rail-badge">{problemCount}</span> : null}
+                </button>
+                <button
+                  type="button"
+                  className={`ori-rail-btn${sidebarVisible && sidebarTab === "history" ? " ori-rail-btn--tool-active" : ""}`}
+                  onClick={() => toggleRailTool("history")}
+                  aria-label="Revision History"
+                  title="Revision History"
+                >
+                  <Clock size={16} aria-hidden="true" />
+                </button>
+              </div>
+            </nav>
+
+            {sidebarVisible ? (
+              <WorkspaceSidebar
+                project={project}
+                files={files}
+                activeFilePath={requestedFilePath}
+                tab={sidebarTab}
+                onClose={() => setSidebarVisible(false)}
+                onOpenFile={handleOpenFile}
+                onCreateNote={(p) => void handleCreateNote(p)}
+                onCreateFolder={(p) => void handleCreateFolder(p)}
+                onDeleteFile={(p) => void handleDeleteFile(p)}
+                onSelectDiagnostic={handleSelectDiagnostic}
+                onSelectNode={(nodeId, view) => {
+                  onSelectNode(nodeId);
+                  setInspectorVisible(true);
+                  if (view) onViewChange(view);
+                }}
+              />
+            ) : null}
+
             <main id="ori-main-content" className="ori-canvas" tabIndex={-1}>
               <div className="ori-canvas-scroll">
-                <div className={`ori-canvas-body${activeView === "graph" ? " ori-canvas-body--wide" : ""}`}>
+                <div className={`ori-canvas-body${activeView === "graph" || activeView === "workspace" || activeView === "manuscript" ? " ori-canvas-body--wide" : ""}`}>
                   {error ? (
                     <div className="ori-banner ori-banner--danger" role="alert">
                       <AlertCircle size={17} aria-hidden="true" />
@@ -301,44 +572,118 @@ export function ResearchDashboard(props: DashboardProps) {
                   ) : null}
 
                   {activeView === "research" ? (
-                    <ResearchCanvasView
+                    <>
+                      <header className="ori-doc-header">
+                        <div className="ori-doc-header-top">
+                          <div>
+                            <h1 className="ori-doc-title">{project.title}</h1>
+                            <div className="ori-doc-meta">
+                              <MonoMeta>r{project.revision}</MonoMeta>
+                              <span aria-hidden="true">·</span>
+                              <span>{project.mode === "autonomous" ? "Autonomous" : "Guided"}</span>
+                              <span aria-hidden="true">·</span>
+                              <StatusBadge tone={project.status === "error" ? "danger" : project.status === "investigating" ? "accent" : "ok"}>
+                                {project.status}
+                              </StatusBadge>
+                            </div>
+                          </div>
+
+                          <div className="ori-segmented" role="tablist" aria-label="Research view panels">
+                            <button
+                              type="button"
+                              role="tab"
+                              aria-selected={researchSubTab === "canvas"}
+                              className={`ori-seg-btn${researchSubTab === "canvas" ? " ori-seg-btn--active" : ""}`}
+                              onClick={() => setResearchSubTab("canvas")}
+                            >
+                              Canvas
+                            </button>
+                            <button
+                              type="button"
+                              role="tab"
+                              aria-selected={researchSubTab === "planning"}
+                              className={`ori-seg-btn${researchSubTab === "planning" ? " ori-seg-btn--active" : ""}`}
+                              onClick={() => setResearchSubTab("planning")}
+                            >
+                              Ideation &amp; Tasks ({(project.ideas?.length ?? 0) + (project.tasks?.length ?? 0)})
+                            </button>
+                            <button
+                              type="button"
+                              role="tab"
+                              aria-selected={researchSubTab === "matrix"}
+                              className={`ori-seg-btn${researchSubTab === "matrix" ? " ori-seg-btn--active" : ""}`}
+                              onClick={() => setResearchSubTab("matrix")}
+                            >
+                              Hypotheses ({project.nodes.filter((n) => n.type === "hypothesis").length})
+                            </button>
+                          </div>
+                        </div>
+                      </header>
+
+                      {researchSubTab === "canvas" ? (
+                        <ResearchCanvasView
+                          project={project}
+                          busy={busy}
+                          onSelectNode={(id) => { onSelectNode(id); setInspectorVisible(true); }}
+                          onJumpToPassage={(paperId, quote) => { onJumpToPassage(paperId, quote); setInspectorVisible(true); }}
+                          onEvidenceAction={onEvidenceAction}
+                          onUpdateNode={onUpdateNode}
+                          onTriggerReviewPanel={onTriggerReviewPanel}
+                          onGoToValidation={() => onViewChange("experiments")}
+                        />
+                      ) : researchSubTab === "planning" ? (
+                        <IdeationAndTasksPanel project={project} busy={busy} onPlanningAction={onPlanningAction} />
+                      ) : (
+                        <CompetingHypothesesPanel
+                          project={project}
+                          busy={busy}
+                          onPlanningAction={onPlanningAction}
+                          onSelectNode={(id) => { onSelectNode(id); setInspectorVisible(true); }}
+                        />
+                      )}
+                    </>
+                  ) : null}
+
+                  {activeView === "workspace" ? (
+                    <FilesWorkspace
                       project={project}
+                      files={files}
+                      requestedFilePath={requestedFilePath}
                       busy={busy}
+                      onRefreshFiles={async () => { await onRefreshFiles(project.projectId); }}
                       onSelectNode={(id) => { onSelectNode(id); setInspectorVisible(true); }}
-                      onEvidenceAction={onEvidenceAction}
-                      onTriggerReviewPanel={onTriggerReviewPanel}
-                      onGoToValidation={() => onViewChange("experiments")}
+                      onOpenInStats={(csvPath) => {
+                        setStatsCsvPath(csvPath);
+                        onViewChange("experiments");
+                      }}
                     />
                   ) : null}
 
                   {activeView === "literature" ? (
-                    <section className="ori-section-block">
-                      <SectionHeader
-                        eyebrow="Source Registry"
-                        title="Peer-Reviewed Literature"
-                        description="Click any publication to open its immutable abstract in the inspector and anchor verified passages."
-                      />
-                      <form onSubmit={handleAddDoi} style={{ display: "flex", gap: 10, flexWrap: "wrap" }}>
-                        <input
-                          className="ori-input"
-                          style={{ maxWidth: 380 }}
-                          placeholder="Add paper by DOI (e.g., 10.1038/s41586-023-06221-2)"
-                          value={doiInput}
-                          onChange={(e) => setDoiInput(e.target.value)}
-                          disabled={busy}
-                        />
-                        <button type="submit" className="ori-btn ori-btn--secondary" disabled={busy || !doiInput.trim()}>
-                          <Plus size={14} /> Add Paper by DOI
-                        </button>
-                      </form>
+                    <>
                       <SourceBanner project={project} />
-                      <PaperTable papers={project.nodes.filter((n) => n.type === "paper")} onSelectNode={(id) => { onSelectNode(id); setInspectorVisible(true); }} />
-                    </section>
+                      <LiteratureWorkspace
+                        project={project}
+                        busy={busy}
+                        onSelectNode={(id) => { onSelectNode(id); setInspectorVisible(true); }}
+                        onAddPaperByDoi={onAddPaperByDoi}
+                        onUpdateNode={onUpdateNode}
+                        onAddManualEvidence={onAddManualEvidence}
+                        onImportReferences={onImportReferences}
+                        onSearchDirect={onSearchDirect}
+                        onAddSearchedPapers={onAddSearchedPapers}
+                        onUploadPdf={onUploadPdf}
+                        onFetchOaPdf={onFetchOaPdf}
+                        onSnowballPaper={onSnowballPaper}
+                      />
+                    </>
                   ) : null}
 
                   {activeView === "experiments" ? (
                     <TestingWorkspace
                       project={project}
+                      files={files}
+                      initialCsvPath={statsCsvPath}
                       busy={busy}
                       onSelectNode={(id) => { onSelectNode(id); setInspectorVisible(true); }}
                       onSynthesizeExperiment={(modality) => onSynthesizeExperiment(modality)}
@@ -347,46 +692,52 @@ export function ResearchDashboard(props: DashboardProps) {
                       onDiscoverLabs={onDiscoverLabs}
                       onUpdateLab={onUpdateLab}
                       onImportResult={onImportResult}
+                      onProjectSaved={onProjectSaved}
                     />
                   ) : null}
 
                   {activeView === "graph" ? graph : null}
 
                   {activeView === "manuscript" ? (
-                    <ManuscriptStudio project={project} busy={busy} onAction={onManuscriptAction} />
+                    <ManuscriptStudio
+                      project={project}
+                      busy={busy}
+                      onAction={onManuscriptAction}
+                      onSelectNode={(id) => { onSelectNode(id); setInspectorVisible(true); }}
+                    />
                   ) : null}
 
                   {activeView === "published" ? exportPanel : null}
                 </div>
               </div>
 
-              {/* Non-overlapping Docked Follow-up Bar */}
-              {activeView === "research" ? (
+              {/* Floating Linear-Style Follow-up Composer Pill */}
+              {activeView === "research" && researchSubTab === "canvas" ? (
                 <div className="ori-composer-dock">
-                  <form className="ori-composer-dock-inner" onSubmit={handleFollowUp}>
+                  <form className="ori-composer-pill" onSubmit={handleFollowUp}>
                     <div className="ori-composer-row">
                       <label htmlFor="ori-followup-input" className="ori-visually-hidden">Follow-up question or pushback</label>
                       <input
                         id="ori-followup-input"
-                        className="ori-input"
+                        className="ori-composer-clean-input"
                         placeholder="Ask a follow-up, push back on a paper, or pivot the search..."
                         value={followUp}
                         onChange={(e) => setFollowUp(e.target.value)}
                         disabled={busy || active}
                       />
-                      <button type="submit" className="ori-btn ori-btn--primary" disabled={busy || active || followUp.trim().length < 3}>
-                        <Send size={14} /> Send
+                      <button type="submit" className="ori-btn ori-btn--primary ori-btn--sm" disabled={busy || active || followUp.trim().length < 3}>
+                        <Send size={13} /> Send
                       </button>
                     </div>
                     <div className="ori-composer-shortcuts">
-                      <button type="button" className="ori-btn ori-btn--secondary ori-btn--sm" disabled={busy || active} onClick={onTriggerReviewPanel}>
-                        <ShieldCheck size={14} /> Run Independent Review Panel
+                      <button type="button" className="ori-pill-action" disabled={busy || active} onClick={onTriggerReviewPanel}>
+                        <ShieldCheck size={12} /> Run Independent Review Panel
                       </button>
-                      <button type="button" className="ori-btn ori-btn--secondary ori-btn--sm" disabled={busy || active} onClick={() => onSynthesizeExperiment()}>
-                        <FlaskConical size={14} /> Design Validation Experiment
+                      <button type="button" className="ori-pill-action" disabled={busy || active} onClick={() => onSynthesizeExperiment()}>
+                        <FlaskConical size={12} /> Design Validation Experiment
                       </button>
-                      <button type="button" className="ori-btn ori-btn--ghost ori-btn--sm" disabled={busy || active} onClick={() => onViewChange("manuscript")}>
-                        <FileText size={14} /> Draft Manuscript
+                      <button type="button" className="ori-pill-action" disabled={busy || active} onClick={() => onViewChange("manuscript")}>
+                        <FileText size={12} /> Draft Manuscript
                       </button>
                     </div>
                   </form>
@@ -399,8 +750,11 @@ export function ResearchDashboard(props: DashboardProps) {
                 <NodeInspectorPanel
                   project={project}
                   node={selectedNode}
+                  highlightedQuote={highlightedQuote}
                   busy={busy}
+                  onClose={() => setInspectorVisible(false)}
                   onSelectNode={onSelectNode}
+                  onJumpToPassage={onJumpToPassage}
                   onEvidenceAction={onEvidenceAction}
                   onAddManualEvidence={onAddManualEvidence}
                   onUpdateNode={onUpdateNode}
@@ -409,15 +763,55 @@ export function ResearchDashboard(props: DashboardProps) {
               </aside>
             ) : null}
           </div>
+
+          <CommandPalette
+            open={paletteOpen}
+            initialMode={paletteMode}
+            project={project}
+            files={files}
+            onClose={() => setPaletteOpen(false)}
+            onSwitchView={onViewChange}
+            onOpenFile={handleOpenFile}
+            onSelectNode={(nodeId, view) => {
+              onSelectNode(nodeId);
+              setInspectorVisible(true);
+              if (view) onViewChange(view);
+            }}
+            onCreateNewNote={() => void handleCreateNote(`notes/note-${Date.now().toString().slice(-4)}.md`)}
+            onExport={onExport}
+            onToggleSidebar={() => setSidebarVisible((v) => !v)}
+            onTriggerReview={onTriggerReviewPanel}
+          />
         </>
       )}
 
-      <footer className="ori-footer">
-        <div className="ori-footer-inner">
-          <span>Open Research IDE · Open-source (MIT), local-first, harness- &amp; model-agnostic scientific workspace.</span>
-          <MonoMeta>Exact abstract SHA-256 anchoring · Zero-memory review panel · Frozen expected outcomes</MonoMeta>
+      {!isLanding && project ? (
+        <div className="ori-statusbar" role="contentinfo">
+          <div style={{ display: "flex", alignItems: "center", gap: 12, flexWrap: "wrap" }}>
+            <MonoMeta>Revision r{project.revision}</MonoMeta>
+            <button
+              type="button"
+              className="ori-text-link"
+              style={{ fontSize: 12 }}
+              onClick={() => {
+                setSidebarVisible(true);
+                setSidebarTab("problems");
+              }}
+            >
+              <AlertTriangle size={12} /> {problemCount} {problemCount === 1 ? "Problem" : "Problems"}
+            </button>
+            <MonoMeta>{totalFiles} workspace files</MonoMeta>
+          </div>
+          <MonoMeta>SHA-256 anchored · Citation.js · CodeMirror + KaTeX · RO-Crate 1.1</MonoMeta>
         </div>
-      </footer>
+      ) : (
+        <footer className="ori-footer">
+          <div className="ori-footer-inner">
+            <span>Open Research IDE · Open-source (MIT), local-first, Google Gemini &amp; Gemma scientific workspace.</span>
+            <MonoMeta>Exact abstract SHA-256 anchoring · Zero-memory review panel · RO-Crate 1.1 reproducible bundles</MonoMeta>
+          </div>
+        </footer>
+      )}
     </div>
   );
 }
@@ -479,18 +873,44 @@ function formatUtcTime(value: string): string {
   return `${new Intl.DateTimeFormat("en-US", { hour: "2-digit", minute: "2-digit", timeZone: "UTC" }).format(date)} UTC`;
 }
 
+function HighlightedSnippet({ abstract, quote }: { abstract?: string; quote?: string }) {
+  const snippet = abstractSnippet(abstract, quote, 120);
+  if (snippet) {
+    return (
+      <p className="ori-contradiction-quote">
+        {snippet.truncatedStart ? "…" : ""}
+        {snippet.before}
+        <mark className="ori-abstract-mark">{snippet.match}</mark>
+        {snippet.after}
+        {snippet.truncatedEnd ? "…" : ""}
+      </p>
+    );
+  }
+  if (quote) {
+    return <p className="ori-contradiction-quote">&ldquo;{quote}&rdquo;</p>;
+  }
+  if (abstract) {
+    return <p className="ori-contradiction-quote">{abstract.slice(0, 220)}{abstract.length > 220 ? "…" : ""}</p>;
+  }
+  return null;
+}
+
 function ResearchCanvasView({
   project,
   busy,
   onSelectNode,
+  onJumpToPassage,
   onEvidenceAction,
+  onUpdateNode,
   onTriggerReviewPanel,
   onGoToValidation,
 }: {
   project: ResearchProject;
   busy: boolean;
   onSelectNode: (id: string) => void;
+  onJumpToPassage: (paperId: string, quote?: string) => void;
   onEvidenceAction: (id: string, action: "confirm" | "unconfirm" | "reject") => void;
+  onUpdateNode: (nodeId: string, patch: { title?: string; data?: Record<string, unknown> }) => void;
   onTriggerReviewPanel: () => void;
   onGoToValidation: () => void;
 }) {
@@ -513,14 +933,12 @@ function ResearchCanvasView({
 
   return (
     <>
-      <section className="ori-stage-rail" aria-label="Investigation stages">
-        {steps.map((step, i) => (
-          <div key={step.label} className={`ori-stage-item${step.complete ? " ori-stage-item--complete" : ""}`}>
-            <span className="ori-stage-num">{step.complete ? <Check size={12} /> : i + 1}</span>
-            <span>
-              <span className="ori-stage-label">{step.label}</span>
-              <span className="ori-stage-detail">{step.detail}</span>
-            </span>
+      <section className="ori-stage-inline" aria-label="Investigation stages">
+        {steps.map((step) => (
+          <div key={step.label} className={`ori-stage-pill${step.complete ? " ori-stage-pill--complete" : ""}`}>
+            <span className="ori-stage-dot">{step.complete ? <Check size={10} /> : null}</span>
+            <strong>{step.label}</strong>
+            <MonoMeta>{step.detail}</MonoMeta>
           </div>
         ))}
       </section>
@@ -560,41 +978,104 @@ function ResearchCanvasView({
                 {nodes.filter((n) => n.type === "evidence" || n.type === "contradiction").length > 0 ? (
                   <div className="ori-evidence-list">
                     {nodes.filter((n) => n.type === "evidence" || n.type === "contradiction").map((node) => {
+                      if (node.type === "contradiction") {
+                        const sides = resolveContradictionSides(project, node);
+                        const resolution = (node.data.resolution as ContradictionResolution) || "unresolved";
+                        const resMeta = CONTRADICTION_RESOLUTION_LABELS[resolution] ?? CONTRADICTION_RESOLUTION_LABELS.unresolved;
+                        return (
+                          <div key={node.id} className="ori-evidence-entry ori-evidence-entry--contradiction">
+                            <div style={{ display: "flex", justifyContent: "space-between", gap: 8, flexWrap: "wrap", alignItems: "center" }}>
+                              <button type="button" className="ori-text-link" style={{ fontWeight: 600 }} onClick={() => onSelectNode(node.id)}>
+                                {node.title}
+                              </button>
+                              <StatusBadge tone={resMeta.tone}>{resMeta.label}</StatusBadge>
+                            </div>
+                            {typeof node.data.description === "string" ? (
+                              <p style={{ fontSize: 13.5, color: "var(--text-secondary)" }}>{node.data.description}</p>
+                            ) : null}
+                            {sides.length > 0 ? (
+                              <div className="ori-contradiction-grid">
+                                {sides.map((side) => (
+                                  <div key={side.key} className="ori-contradiction-side">
+                                    <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: 6, flexWrap: "wrap" }}>
+                                      <MonoMeta>{side.sideLabel}</MonoMeta>
+                                      {side.paper?.data.year ? <MonoMeta>{side.paper.data.year}</MonoMeta> : null}
+                                    </div>
+                                    {side.paper ? (
+                                      <strong style={{ fontSize: 13, color: "var(--text-primary)" }}>{side.paper.title}</strong>
+                                    ) : null}
+                                    <HighlightedSnippet abstract={side.abstract} quote={side.quote} />
+                                    {side.definitionNote ? (
+                                      <p style={{ fontSize: 12, color: "var(--text-secondary)" }}>{side.definitionNote}</p>
+                                    ) : null}
+                                    {side.paper ? (
+                                      <button
+                                        type="button"
+                                        className="ori-text-link"
+                                        style={{ fontSize: 12, alignSelf: "flex-start" }}
+                                        onClick={() => onJumpToPassage(side.paper!.id, side.quote)}
+                                      >
+                                        Jump to passage in paper <ArrowUpRight size={12} />
+                                      </button>
+                                    ) : null}
+                                  </div>
+                                ))}
+                              </div>
+                            ) : null}
+                            <div className="ori-triage-row" role="group" aria-label="Classify contradiction">
+                              <MonoMeta>Triage:</MonoMeta>
+                              {TRIAGE_OPTIONS.map((option) => (
+                                <button
+                                  key={option}
+                                  type="button"
+                                  disabled={busy}
+                                  className={`ori-chip-btn${resolution === option ? " ori-chip-btn--active" : ""}`}
+                                  onClick={() => onUpdateNode(node.id, { data: { resolution: option } })}
+                                >
+                                  {CONTRADICTION_RESOLUTION_LABELS[option].shortLabel}
+                                </button>
+                              ))}
+                            </div>
+                          </div>
+                        );
+                      }
+
                       const sourcePaper = node.data.paperId ? paperMap.get(node.data.paperId) : undefined;
                       const rejected = node.data.verificationStatus === "rejected";
-                      const entryCls = node.type === "contradiction"
-                        ? "ori-evidence-entry ori-evidence-entry--contradiction"
-                        : node.data.verified
-                          ? "ori-evidence-entry ori-evidence-entry--verified"
-                          : "ori-evidence-entry";
+                      const entryCls = node.data.verified ? "ori-evidence-entry ori-evidence-entry--verified" : "ori-evidence-entry";
                       return (
                         <div key={node.id} className={entryCls}>
                           <div style={{ display: "flex", justifyContent: "space-between", gap: 8, flexWrap: "wrap" }}>
                             <button type="button" className="ori-text-link" style={{ fontWeight: 600 }} onClick={() => onSelectNode(node.id)}>
                               {node.title}
                             </button>
-                            <StatusBadge tone={node.type === "contradiction" || rejected ? "danger" : node.data.verified ? "ok" : "warn"}>
-                              {node.type === "contradiction" ? "Contradiction" : rejected ? "Rejected" : node.data.verified ? "Confirmed" : "Unverified"}
+                            <StatusBadge tone={rejected ? "danger" : node.data.verified ? "ok" : "warn"}>
+                              {rejected ? "Rejected" : node.data.verified ? "Confirmed" : "Unverified"}
                             </StatusBadge>
                           </div>
                           {node.data.quote ? <blockquote>&ldquo;{node.data.quote}&rdquo;</blockquote> : null}
                           <div className="ori-evidence-actions">
                             {sourcePaper ? (
-                              <button type="button" className="ori-text-link" style={{ fontSize: 12 }} onClick={() => onSelectNode(sourcePaper.id)}>
-                                Source: {sourcePaper.title}
+                              <button
+                                type="button"
+                                className="ori-text-link"
+                                style={{ fontSize: 12 }}
+                                onClick={() => onJumpToPassage(sourcePaper.id, node.data.quote)}
+                              >
+                                Jump to passage: {sourcePaper.title} <ArrowUpRight size={12} />
                               </button>
                             ) : null}
-                            {node.type === "evidence" && !node.data.verified ? (
+                            {!node.data.verified ? (
                               <button type="button" className="ori-btn ori-btn--primary ori-btn--sm" disabled={busy} onClick={() => onEvidenceAction(node.id, "confirm")}>
                                 <ClipboardCheck size={13} /> Confirm evidence
                               </button>
                             ) : null}
-                            {node.type === "evidence" && node.data.verified ? (
+                            {node.data.verified ? (
                               <button type="button" className="ori-btn ori-btn--secondary ori-btn--sm" disabled={busy} onClick={() => onEvidenceAction(node.id, "unconfirm")}>
                                 Unconfirm
                               </button>
                             ) : null}
-                            {node.type === "evidence" && !rejected ? (
+                            {!rejected ? (
                               <button type="button" className="ori-btn ori-btn--ghost ori-btn--sm" disabled={busy} onClick={() => onEvidenceAction(node.id, "reject")}>
                                 <XCircle size={13} /> Reject
                               </button>
@@ -716,8 +1197,11 @@ function ResearchCanvasView({
 function NodeInspectorPanel({
   project,
   node,
+  highlightedQuote,
   busy,
+  onClose,
   onSelectNode,
+  onJumpToPassage,
   onEvidenceAction,
   onAddManualEvidence,
   onUpdateNode,
@@ -725,8 +1209,11 @@ function NodeInspectorPanel({
 }: {
   project: ResearchProject;
   node?: ResearchNode;
+  highlightedQuote?: string;
   busy: boolean;
+  onClose: () => void;
   onSelectNode: (id: string) => void;
+  onJumpToPassage: (paperId: string, quote?: string) => void;
   onEvidenceAction: (id: string, action: "confirm" | "unconfirm" | "reject") => void;
   onAddManualEvidence: (paperId: string, quote: string, title?: string) => void;
   onUpdateNode: (nodeId: string, patch: { title?: string; data?: Record<string, unknown> }) => void;
@@ -736,6 +1223,23 @@ function NodeInspectorPanel({
   const [quoteTitle, setQuoteTitle] = useState("");
   const [editingTitle, setEditingTitle] = useState("");
   const [isEditing, setIsEditing] = useState(false);
+  const markRef = useRef<HTMLElement>(null);
+  const compareDialogRef = useRef<HTMLDialogElement>(null);
+
+  const paperAbstract = node?.type === "paper" && typeof node.data.abstract === "string" ? node.data.abstract : undefined;
+  const fallbackPaperQuote = node?.type === "paper"
+    ? project.nodes.find((n) => n.type === "evidence" && n.data.paperId === node.id && typeof n.data.quote === "string")?.data.quote
+    : undefined;
+  const activePaperQuote = highlightedQuote && splitAbstractAroundQuote(paperAbstract, highlightedQuote)
+    ? highlightedQuote
+    : fallbackPaperQuote;
+  const highlightedAbstractSplit = splitAbstractAroundQuote(paperAbstract, activePaperQuote);
+
+  useEffect(() => {
+    if (node?.type === "paper" && markRef.current) {
+      markRef.current.scrollIntoView({ block: "center", behavior: "smooth" });
+    }
+  }, [node?.id, node?.type, activePaperQuote]);
 
   if (!node) {
     const papers = project.nodes.filter((n) => n.type === "paper").length;
@@ -746,11 +1250,16 @@ function NodeInspectorPanel({
     return (
       <div className="ori-inspector-card">
         <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
-          <strong style={{ fontSize: 14 }}>Investigation Inspector</strong>
-          <MonoMeta>r{project.revision}</MonoMeta>
+          <strong style={{ fontSize: 13.5 }}>Investigation Inspector</strong>
+          <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
+            <MonoMeta>r{project.revision}</MonoMeta>
+            <button type="button" className="ori-rail-mini-btn" onClick={onClose} aria-label="Close inspector">
+              <X size={14} />
+            </button>
+          </div>
         </div>
         <p style={{ fontSize: 13, color: "var(--text-secondary)" }}>
-          Click any paper, quote, hypothesis, review, or experiment to inspect its SHA-256 provenance, verify passages, or edit titles.
+          Click any paper, contradiction, quote, hypothesis, review, or experiment to compare passages, check SHA-256 provenance, or verify claims.
         </p>
         <dl className="ori-dl" style={{ paddingTop: 8, borderTop: "1px solid var(--border-subtle)" }}>
           <div style={{ display: "flex", justifyContent: "space-between" }}><dt>Literature</dt><dd><MonoMeta>{papers} papers</MonoMeta></dd></div>
@@ -773,12 +1282,21 @@ function NodeInspectorPanel({
     }
   };
 
+  const contradictionSides = node.type === "contradiction" ? resolveContradictionSides(project, node) : [];
+  const contradictionResolution = (node.data.resolution as ContradictionResolution) || "unresolved";
+  const contradictionMeta = CONTRADICTION_RESOLUTION_LABELS[contradictionResolution] ?? CONTRADICTION_RESOLUTION_LABELS.unresolved;
+
   return (
     <>
       <div className="ori-inspector-card">
         <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: 8 }}>
           <StatusBadge tone="accent">{NODE_LABELS[node.type]}</StatusBadge>
-          <MonoMeta>r{project.revision}</MonoMeta>
+          <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
+            <MonoMeta>r{project.revision}</MonoMeta>
+            <button type="button" className="ori-rail-mini-btn" onClick={onClose} aria-label="Close inspector">
+              <X size={14} />
+            </button>
+          </div>
         </div>
         {isEditing ? (
           <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
@@ -813,6 +1331,143 @@ function NodeInspectorPanel({
         </div>
       </div>
 
+      {node.type === "contradiction" ? (
+        <div className="ori-inspector-card">
+          <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: 8, flexWrap: "wrap" }}>
+            <strong style={{ fontSize: 13 }}>Compare Both Passages</strong>
+            <StatusBadge tone={contradictionMeta.tone}>{contradictionMeta.shortLabel}</StatusBadge>
+          </div>
+          {typeof node.data.description === "string" ? (
+            <p style={{ fontSize: 12.5, color: "var(--text-secondary)" }}>{node.data.description}</p>
+          ) : null}
+          {contradictionSides.length > 0 ? (
+            <>
+              <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
+                {contradictionSides.map((side) => (
+                  <div key={side.key} className="ori-contradiction-side">
+                    <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: 6 }}>
+                      <MonoMeta>{side.sideLabel}</MonoMeta>
+                      {side.paper?.data.year ? <MonoMeta>{side.paper.data.year}</MonoMeta> : null}
+                    </div>
+                    {side.paper ? <strong style={{ fontSize: 12.5 }}>{side.paper.title}</strong> : null}
+                    <HighlightedSnippet abstract={side.abstract} quote={side.quote} />
+                    {side.definitionNote ? (
+                      <p style={{ fontSize: 12, color: "var(--text-secondary)" }}>{side.definitionNote}</p>
+                    ) : null}
+                    {side.paper ? (
+                      <button
+                        type="button"
+                        className="ori-btn ori-btn--secondary ori-btn--sm"
+                        onClick={() => onJumpToPassage(side.paper!.id, side.quote)}
+                      >
+                        Jump to passage <ArrowUpRight size={12} />
+                      </button>
+                    ) : null}
+                  </div>
+                ))}
+              </div>
+              <button
+                type="button"
+                className="ori-btn ori-btn--secondary ori-btn--sm"
+                onClick={() => compareDialogRef.current?.showModal()}
+              >
+                <Columns2 size={13} /> Wide Side-by-Side View
+              </button>
+            </>
+          ) : (
+            <p style={{ fontSize: 12, color: "var(--text-muted)" }}>
+              No linked study passages recorded yet. Check Semantic Links below.
+            </p>
+          )}
+          <div className="ori-triage-row" role="group" aria-label="Triage contradiction">
+            {TRIAGE_OPTIONS.map((option) => (
+              <button
+                key={option}
+                type="button"
+                disabled={busy}
+                className={`ori-chip-btn${contradictionResolution === option ? " ori-chip-btn--active" : ""}`}
+                onClick={() => onUpdateNode(node.id, { data: { resolution: option } })}
+              >
+                {CONTRADICTION_RESOLUTION_LABELS[option].shortLabel}
+              </button>
+            ))}
+          </div>
+
+          <dialog ref={compareDialogRef} className="ori-dialog ori-dialog--wide" aria-label="Side-by-side contradiction comparison">
+            <div className="ori-dialog-head">
+              <div>
+                <h2>{node.title}</h2>
+                <p style={{ fontSize: 13, color: "var(--text-secondary)", marginTop: 2 }}>
+                  Inspect both exact passages inside their full immutable abstracts to check definitions and conditions.
+                </p>
+              </div>
+              <button type="button" className="ori-icon-btn" onClick={() => compareDialogRef.current?.close()} aria-label="Close comparison">
+                <X size={16} />
+              </button>
+            </div>
+            <div className="ori-dialog-body">
+              <div className="ori-contradiction-grid">
+                {contradictionSides.map((side) => {
+                  const fullSplit = splitAbstractAroundQuote(side.abstract, side.quote);
+                  return (
+                    <div key={side.key} className="ori-contradiction-side">
+                      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: 8 }}>
+                        <MonoMeta>{side.sideLabel}</MonoMeta>
+                        {side.paper?.data.venue ? <MonoMeta>{side.paper.data.venue}</MonoMeta> : null}
+                      </div>
+                      {side.paper ? <strong style={{ fontSize: 15 }}>{side.paper.title}</strong> : null}
+                      {fullSplit ? (
+                        <p className="ori-contradiction-quote">
+                          {fullSplit.before}
+                          <mark className="ori-abstract-mark">{fullSplit.match}</mark>
+                          {fullSplit.after}
+                        </p>
+                      ) : side.abstract ? (
+                        <p className="ori-contradiction-quote">{side.abstract}</p>
+                      ) : side.quote ? (
+                        <p className="ori-contradiction-quote">&ldquo;{side.quote}&rdquo;</p>
+                      ) : null}
+                      {side.definitionNote ? (
+                        <p style={{ fontSize: 12.5, color: "var(--text-secondary)" }}><strong>Protocol / definition:</strong> {side.definitionNote}</p>
+                      ) : null}
+                      {side.paper ? (
+                        <button
+                          type="button"
+                          className="ori-btn ori-btn--secondary ori-btn--sm"
+                          onClick={() => {
+                            compareDialogRef.current?.close();
+                            onJumpToPassage(side.paper!.id, side.quote);
+                          }}
+                        >
+                          Jump to paper in inspector <ArrowUpRight size={12} />
+                        </button>
+                      ) : null}
+                    </div>
+                  );
+                })}
+              </div>
+            </div>
+            <div className="ori-dialog-foot">
+              <div className="ori-triage-row">
+                <MonoMeta>Classification:</MonoMeta>
+                {TRIAGE_OPTIONS.map((option) => (
+                  <button
+                    key={option}
+                    type="button"
+                    disabled={busy}
+                    className={`ori-chip-btn${contradictionResolution === option ? " ori-chip-btn--active" : ""}`}
+                    onClick={() => onUpdateNode(node.id, { data: { resolution: option } })}
+                  >
+                    {CONTRADICTION_RESOLUTION_LABELS[option].shortLabel}
+                  </button>
+                ))}
+              </div>
+              <button type="button" className="ori-btn ori-btn--primary ori-btn--sm" onClick={() => compareDialogRef.current?.close()}>Done</button>
+            </div>
+          </dialog>
+        </div>
+      ) : null}
+
       {node.type === "evidence" ? (
         <div className="ori-inspector-card">
           <strong style={{ fontSize: 13 }}>
@@ -822,6 +1477,15 @@ function NodeInspectorPanel({
             SHA-256 verified against the immutable abstract snapshot.
           </p>
           <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
+            {typeof node.data.paperId === "string" ? (
+              <button
+                type="button"
+                className="ori-btn ori-btn--secondary ori-btn--sm"
+                onClick={() => onJumpToPassage(node.data.paperId!, node.data.quote)}
+              >
+                Jump to passage <ArrowUpRight size={12} />
+              </button>
+            ) : null}
             {!node.data.verified ? (
               <button type="button" className="ori-btn ori-btn--primary ori-btn--sm" disabled={busy} onClick={() => onEvidenceAction(node.id, "confirm")}>
                 <CheckCircle2 size={13} /> Confirm
@@ -838,17 +1502,27 @@ function NodeInspectorPanel({
         </div>
       ) : null}
 
-      {node.type === "paper" && typeof node.data.abstract === "string" && node.data.abstract.trim() ? (
+      {node.type === "paper" && paperAbstract && paperAbstract.trim() ? (
         <div className="ori-inspector-card">
-          <strong style={{ fontSize: 13 }}>Highlight &amp; Anchor Evidence</strong>
+          <strong style={{ fontSize: 13 }}>Immutable Abstract &amp; Evidence Anchoring</strong>
           <p style={{ fontSize: 12, color: "var(--text-secondary)" }}>
-            Select text inside the immutable abstract below to anchor a human-verified passage.
+            {highlightedAbstractSplit
+              ? "Highlighted passage shown below. Select any text to anchor a new verified quote."
+              : "Select text inside the immutable abstract below to anchor a human-verified passage."}
           </p>
           <div
             onMouseUp={captureAbstractSelection}
-            style={{ padding: 12, borderRadius: 10, background: "var(--bg-subtle)", fontSize: 13, lineHeight: 1.5, maxHeight: 200, overflowY: "auto" }}
+            style={{ padding: 12, borderRadius: 10, background: "var(--bg-subtle)", fontSize: 13, lineHeight: 1.55, maxHeight: 220, overflowY: "auto" }}
           >
-            {node.data.abstract}
+            {highlightedAbstractSplit ? (
+              <>
+                {highlightedAbstractSplit.before}
+                <mark ref={markRef} className="ori-abstract-mark">{highlightedAbstractSplit.match}</mark>
+                {highlightedAbstractSplit.after}
+              </>
+            ) : (
+              paperAbstract
+            )}
           </div>
           <input
             className="ori-input"
@@ -882,12 +1556,20 @@ function NodeInspectorPanel({
         <strong style={{ fontSize: 13 }}>Canonical Data</strong>
         <dl className="ori-dl">
           <div><dt>Node ID</dt><dd><MonoMeta>{node.id}</MonoMeta></dd></div>
-          {Object.entries(node.data).filter(([, v]) => v !== undefined && v !== null && v !== "").map(([k, v]) => (
-            <div key={k}>
-              <dt>{k}</dt>
-              <dd>{typeof v === "object" ? <pre>{JSON.stringify(v, null, 2)}</pre> : String(v)}</dd>
-            </div>
-          ))}
+          {Object.entries(node.data)
+            .filter(([k, v]) => v !== undefined && v !== null && v !== "" && k !== "pages")
+            .map(([k, v]) => (
+              <div key={k}>
+                <dt>{k}</dt>
+                <dd>
+                  {k === "fullText" && typeof v === "string"
+                    ? `${v.slice(0, 320)}… (${v.length} chars)`
+                    : typeof v === "object"
+                      ? <pre>{JSON.stringify(v, null, 2)}</pre>
+                      : String(v)}
+                </dd>
+              </div>
+            ))}
         </dl>
       </div>
 
